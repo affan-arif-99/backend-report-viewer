@@ -242,8 +242,391 @@ def extract_action_plan(soup):
             })
 
     ap["medications"] = meds
+
+    supplements_title_tag = soup.find("h3", id="ShdMrpMedsSupplements")
+    ap["supplements"] = {}
+    ap["supplements"]["title"] = supplements_title_tag.get_text(" ", strip=True) if supplements_title_tag else "Supplements"
+    
+    ap["supplements"]["intro"] = []
+    supplements_intro = supplements_title_tag.find_next("div").find("p")
+    supplements_intro = supplements_intro.get_text(" ", strip=True) if supplements_intro else ""
+    supplements_intro = [line.strip() for line in supplements_intro.split(".") if line.strip()]
+    ap["supplements"]["intro"] = supplements_intro
+
+    ap["supplements"]["meds"] = []
+    if supplements_title_tag:
+        supplements_table = supplements_title_tag.find_next("table")
+        # iterate each data row
+        for row in supplements_table.find_all("tr")[1:]:
+            cols = row.find_all("td")
+            if len(cols) < 4:
+                continue
+
+            # Basic columns
+            medication    = cols[0].get_text(" ", strip=True)
+            dosageDetails = cols[1].get_text(" ", strip=True)
+            guidance      = cols[3].get_text(" ", strip=True)
+
+            # --- Parse reasoning column into structured entries ---
+            reasoning_td = cols[2]
+            # get text with explicit separators for <br>
+            text = reasoning_td.get_text(separator="\n\r", strip=True)
+            current_action, reasons = text.split(":", 1) if ":" in text else [text, ""]
+            lines = [line.strip() for line in reasons.split("\n\r") if line.strip()]
+
+            reasoning_entries = []
+            for line in lines:
+                # bullet lines start with '•' or '-' or digits
+                if line.startswith("•") or line.startswith("-"):
+                    bullet = line.lstrip("•- ").strip()
+                    # split name and level in parentheses
+                    m = re.match(r"(.+?)\s*\((.+)\)", bullet)
+                    if m:
+                        name, level = m.groups()
+                    else:
+                        name, level = bullet, ""
+                    reasoning_entries.append({
+                        "name": name.strip(),
+                        "currentLevel": level.strip()
+                    })
+                else:
+                    m2 = re.match(r"(.+?)\s*\((.+)\)\.?", line)
+                    if m2:
+                        action_text, usage = m2.groups()
+                        reasoning_entries.append({
+                            "action": action_text.strip(),
+                            "currentUsage": usage.strip()
+                        })
+                    else:
+                        # fallback: treat any other non-bullet line as a new action
+                        reasoning_entries.append({
+                            "action": line,
+                            "currentUsage": ""
+                        })
+
+            ap["supplements"]["meds"].append({
+                "medication":    medication,
+                "dosageDetails": dosageDetails,
+                "reasoning": {
+                    "action": current_action,
+                    "entries": reasoning_entries
+                },
+                "guidance":      guidance
+            })
+    
+
     return ap
 
+def extract_current_medication(soup):
+    current_medication = {}
+    medications = soup.find("div", id="Medications")
+    current_medication_title = medications.find("h3", id="ShdMrtMedsCurrent")
+    current_medication["title"] = current_medication_title.get_text(" ", strip=True) if current_medication_title else "Current Medication"
+    
+    current_medication_intro = current_medication_title.find_next("p")
+    current_medication["intro"] = current_medication_intro.get_text(" ", strip=True) if current_medication_intro else ""
+    
+    current_medication_table = current_medication_title.find_next("table") if current_medication_title else None
+    meds = []
+    headers = []
+    if current_medication_table:
+        # Extract headers
+        headers = [th.get_text(" ", strip=True) for th in current_medication_table.find_all("th")]
+        # Extract rows
+        for row in current_medication_table.find_all("tr")[1:]:  # skip header row
+            cols = row.find_all("td")
+            if len(cols) == 4:
+                medication = cols[0].get_text(" ", strip=True)
+                dosage_details = cols[1].get_text(" ", strip=True)
+                indication = cols[2].get_text(" ", strip=True)
+                date_started = cols[3].get_text(" ", strip=True)
+                meds.append({
+                    "medication": medication,
+                    "dosageDetails": dosage_details,
+                    "indication": indication,
+                    "dateStarted": date_started
+                })
+    current_medication["headers"] = headers
+    current_medication["medications"] = meds
+    return current_medication
+
+def extract_lifestyle(soup):
+    lifestyle = {}
+    lifestyle_title_tag = soup.find("h2", id="ShdMrpLifestyle")
+    lifestyle["title"] = lifestyle_title_tag.get_text(" ", strip=True)
+
+    lifestyle_intro = lifestyle_title_tag.find_next("div").find("p")
+    lifestyle_intro = lifestyle_intro.get_text(" ", strip=True) if lifestyle_intro else ""
+    # lifestyle_intro = [line.strip() for line in lifestyle_intro.split(".") if line.strip()]
+    lifestyle["intro"] = lifestyle_intro
+    
+    lifestyle["recommendations"] = []
+
+    # Find the recommendations table after the lifestyle_title_tag
+    recommendations_table = lifestyle_title_tag.find_next("table")
+    if recommendations_table:
+        # Skip the header row (first <tr>)
+        for tr in recommendations_table.find_all("tr")[1:]:
+            tds = tr.find_all("td")
+            # Extract area text, image name (if present), and area title
+            area_img = tds[0].find("img")
+            area_image = area_img["src"] if area_img and area_img.has_attr("src") else None
+            area_title = tds[0].get_text(" ", strip=True)
+            area = {
+                "title": area_title,
+                "image": area_image
+            }
+            task = tds[1].get_text(" ", strip=True)
+            instructions_text = tds[2].get_text(" ", strip=True)
+            # Split by full stop, remove empty entries, strip whitespace
+            instructions = [instr.strip() for instr in instructions_text.split('.') if instr.strip()]
+            lifestyle["recommendations"].append({
+                "area": area,
+                "task": task,
+                "instructions": instructions
+            })
+    return lifestyle
+
+def extract_nutrition(soup):
+    nutrition = {}
+    nutrition["recommendations"] = {}
+    nutrition_header = soup.find("h2", id="ShdMrpNewDiet")
+    nutrition["recommendations"]["header"] = nutrition_header.get_text(" ", strip=True)
+    
+    nutrition_header_intro = nutrition_header.find_next("p")
+    nutrition["recommendations"]["header_intro"] = nutrition_header_intro.get_text(" ", strip=True) if nutrition_header_intro else ""
+    
+    mind_diet_title = soup.find("h3", id="ShdMrpMINDDiet")
+    nutrition["mind_diet_title"] = mind_diet_title.get_text(" ", strip=True) if mind_diet_title else "MIND Diet"
+    mind_diet_intro = mind_diet_title.find_next("div").find("p")
+    nutrition["recommendations"]["mind_diet_intro"] = mind_diet_intro.get_text(" ", strip=True) if mind_diet_intro else ""
+    
+    recommended_instructions = mind_diet_intro.find_next("p")
+    nutrition["recommendations"]["recommended_instructions"] = recommended_instructions.get_text(" ", strip=True) if recommended_instructions else ""
+    
+    recommended_diet = {
+        "headers": [],
+        "entries": []
+    }
+    recommended_diet_table = mind_diet_title.find_next("table")
+    if recommended_diet_table:
+        headers = [th.get_text(" ", strip=True) for th in recommended_diet_table.find_all("th")]
+        recommended_diet["headers"] = headers
+        rows = recommended_diet_table.find_all("tr")[1:]  # skip header row
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) == 2:
+                food_group = cols[0].get_text(" ", strip=True)
+                frequency = cols[1].get_text(" ", strip=True)
+                recommended_diet["entries"].append({
+                    "foodGroup": food_group,
+                    "frequency": frequency
+                })
+    nutrition["recommendations"]["recommended_diet"] = recommended_diet
+    
+    # Discouraged Foods Section
+    discouraged_instructions = recommended_diet_table.find_next("p")
+    nutrition["recommendations"]["discouraged_instructions"] = discouraged_instructions.get_text(" ", strip=True) if discouraged_instructions else "Discouraged Foods"
+
+    discouraged_table = discouraged_instructions.find_next("table") if discouraged_instructions else None
+    discouraged_diet = {
+        "headers": [],
+        "entries": []
+    }
+    if discouraged_table:
+        discouraged_diet["headers"] = [th.get_text(" ", strip=True) for th in discouraged_table.find_all("th")]
+        for row in discouraged_table.find_all("tr")[1:]:
+            cols = row.find_all("td")
+            if len(cols) == 2:
+                food_group = cols[0].get_text(" ", strip=True)
+                frequency = cols[1].get_text(" ", strip=True)
+                discouraged_diet["entries"].append({
+                    "foodGroup": food_group,
+                    "frequency": frequency
+                })
+    nutrition["recommendations"]["discouraged_diet"] = discouraged_diet
+    
+    nutrition["summary"] = {}
+    summary_title = discouraged_table.find_next("h2")
+    nutrition["summary"]["title"] = summary_title.get_text(" ", strip=True) if summary_title else "Summary"
+    
+    outer_table = summary_title.find_next("table")
+    warning = outer_table.find("td").contents[0]
+    
+    nutrition["summary"]["warning"] = warning.get_text(" ", strip=True) if warning else ""
+    
+    nutrition["summary"]["deficiencies"] = []
+    inner_tables = outer_table.find_all("table")
+    for idx, row in enumerate(inner_tables):
+        # print("Table", row)
+        
+        deficiency = {}
+        if idx % 2 == 0:
+            # Even index rows are first column
+            nutrient_text = row.find_all("td")[2].get_text(" ", strip=True)
+            deficiency["nutrient"] = nutrient_text.split(",")[0].strip().strip(":")
+            deficiency["normal_range"] = nutrient_text.split(",")[1].strip().strip(":") if len(nutrient_text.split(",")) > 1 else ""
+        else:
+            # Odd index rows are second column
+            deficiency["result"] = {}
+            result_col = row.find_all("td")[2]
+            result_text = result_col.get_text(" ", strip=True)
+            # Extract nutrient_sub (text in round brackets)
+            nutrient_sub_match = re.search(r"\(([^)]+)\)", result_text)
+            nutrient_sub = nutrient_sub_match.group(1) if nutrient_sub_match else ""
+            # Remove nutrient_sub from result_text
+            if nutrient_sub:
+                result_text = result_text.replace(f"({nutrient_sub})", "").strip()
+                
+            # Extract reading (number + units)
+            reading_match = re.search(r"(?<![a-zA-Z])\b(\d+(?:\.\d+)?\s*\w*)\b", result_text)
+            reading = reading_match.group(1) if reading_match else ""
+            # Remove reading from desc
+            result_text = result_text.replace(reading, "").strip()
+            # Extract severity
+            severity_match = re.match(r"(very high|high|low|very low)", result_text, re.IGNORECASE)
+            severity = severity_match.group(1).lower() if severity_match else ""
+            # Remove severity from text
+            result_text = re.sub(r"^(very high|high|low|very low)\s*", "", result_text, flags=re.IGNORECASE)
+
+
+            deficiency["result"]["severity"] = severity
+            deficiency["result"]["desc"] = result_text.strip()
+            deficiency["result"]["reading"] = reading
+            deficiency["nutrient_sub"] = nutrient_sub
+
+        # Only append if index does not exist in deficiencies array
+        if idx % 2 == 0:
+            nutrition["summary"]["deficiencies"].append(deficiency)
+        else:
+            nutrition["summary"]["deficiencies"][len(nutrition["summary"]["deficiencies"]) - 1] = {**nutrition["summary"]["deficiencies"][len(nutrition["summary"]["deficiencies"]) - 1], **deficiency}
+
+    consumption = {}
+    advice = outer_table.find_next("p")
+    consumption["advice"] = advice.get_text(" ", strip=True) if advice else ""
+    consumption_table_outer = advice.find_next("table")
+    consumption_title = consumption_table_outer.find("td").contents[0]
+    consumption["title"] = consumption_title.get_text(" ", strip=True) if consumption_title else "Dietary Consumption Summary"
+
+    consumption["entries"] = []
+    consumption_table_inner = consumption_table_outer.find("table")
+    for idx, row in enumerate(consumption_table_inner.find_all("tr")[0:]):
+        entry = {}
+        # print("Row", row)
+        # Extract nutrient name
+        consumption_group = row.find_all("td")[2]
+        entry["group"] = consumption_group.get_text(" ", strip=True).split(":")[0].strip() if consumption_group else ""
+        entry["intake"] = consumption_group.get_text(" ", strip=True).split(":")[1].strip() if consumption_group and ":" in consumption_group.get_text(" ", strip=True) else ""
+
+        # Extract nutrient value
+        note = row.find_all("td")[4]
+        entry["note"] = note.get_text(" ", strip=True) if note else ""
+
+        consumption["entries"].append(entry)
+        
+    nutrition["consumption"] = consumption
+    
+    return nutrition
+
+def extract_cognitive_function(soup):
+    # Extract the "Factors Related to Cognitive Decline" section
+    cognitive_section = soup.find("div", id="OutOfRange")
+    if not cognitive_section:
+        return {}
+
+    # Title
+    title_tag = cognitive_section.find("h1", id="ShdMrpFactors")
+    title = title_tag.get_text(" ", strip=True) if title_tag else "Factors Related to Cognitive Decline"
+
+    # Intro paragraph
+    intro_p = title_tag.find_next("p") if title_tag else None
+    intro = intro_p.get_text(" ", strip=True) if intro_p else ""
+
+    # Extract all tabSummary tables
+    tables = cognitive_section.find_all("table", class_="tabSummary")
+    factors = []
+    for tbl in tables:
+        # Section title
+        th = tbl.find("th")
+        section_title = th.get_text(" ", strip=True) if th else ""
+
+        # Each tabSummary table should map to a single factor object
+        factor = {
+            "section": section_title,
+            "entries": []
+        }
+
+        # Each <td> is a factor entry
+        for tr in tbl.find_all("tr", recursive=False)[1:]:
+            function = ""
+            small_text = ""
+            immediate_text = ""
+            
+            td = tr.find("td", colspan="1")
+            if td:
+                # Get text only immediately inside <td> (not from children)
+                immediate_text = "".join(t for t in td.contents if isinstance(t, str)).strip()
+                # Get text from the immediate <small> tag (if present)
+                small_tag = td.find("small", recursive=False)
+                small_text = small_tag.get_text(" ", strip=True) if small_tag else ""
+
+            table = tr.find("table")
+            if table:
+                function = table.get_text(" ", strip=True).strip()
+
+            target_level = ""
+            target_match = re.search(r"target:\s*([<≥>=]*\s*[0-9.]+\s*[^\s]+)", function)
+            if target_match:
+                target_level = target_match.group(1).strip()
+                function = function.replace(target_match.group(1), "").strip()
+                function = function.replace("target:", "").strip()
+
+            current_level = ""
+            
+            # if function:
+            #     m = re.search(r"([A-Za-z\s\-]+)?([0-9.]+)\s*([^\s]+)?$", function)
+            #     print("Function:", m)
+            #     if m:
+            #         current_level = m.group(2)
+            #         if m.group(3):
+            #             current_level += " " + m.group(3).strip()
+            #     else:
+            #         current_level = function
+            
+            pattern = re.compile(
+                r'(?i)^\s*(very\s+high|high|very\s+low|low|moderately\s+high|moderately\s+low)\s+'  # group 1: severity phrase
+                r'(.+?)\s+'                                      # group 2: measurement label
+                r'(\d+(?:\.\d+)?(?:\s*\S+)*?)\s*$'               # group 3: number + optional units
+            )
+            severity, measurement, value = "", "", ""
+            m = pattern.match(function)
+            if m:
+                print("Function:", m)
+                severity, measurement, value = m.groups()
+
+            img = None
+            img_tag = tr.find("img", recursive=False)
+            if img_tag and img_tag.has_attr("src"):
+                img = img_tag["src"]
+
+            factor["entries"].append({
+                "description": immediate_text + "\n" + small_text,
+                "severity": severity.strip() if severity else "",
+                "measurement": measurement.strip() if measurement else "",
+                "currentLevel": value.strip() if value else "",
+                # "currentLevel": current_level,
+                "targetLevel": target_level,
+                "image": img
+            })
+
+        factors.append(factor)
+
+    return {
+        "title": title,
+        "intro": intro,
+        "factors": factors
+    }
+    
 
 def main(path):
     # Read as raw bytes so BeautifulSoup can detect encoding
@@ -256,7 +639,11 @@ def main(path):
     report = {
         "preface": extract_preface(soup),
         "healthReport": extract_health_report(soup),
-        "actionPlan": extract_action_plan(soup)
+        "actionPlan": extract_action_plan(soup),
+        "lifestyle": extract_lifestyle(soup),
+        "nutrition": extract_nutrition(soup),
+        "currentMedication": extract_current_medication(soup),
+        "cognitiveFunction": extract_cognitive_function(soup)
     }
     with open("report.json", "w", encoding="utf-8") as out:
         json.dump(report, out, indent=2)
