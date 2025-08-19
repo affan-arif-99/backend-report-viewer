@@ -606,7 +606,7 @@ def extract_cognitive_function(soup):
             severity, measurement, value = "", "", ""
             m = pattern.match(function)
             if m:
-                print("Function:", m)
+                # print("Function:", m)
                 severity, measurement, value = m.groups()
 
             img = None
@@ -937,7 +937,7 @@ def _find_following_table_with_headers(start: Tag, headers: list[str]) -> Tag | 
 #         "items": items
 #     }
 
-def main():
+def main(path: str, output: str):
     # Read as raw bytes so BeautifulSoup can detect encoding
     path = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
     with open(path, 'rb') as f:
@@ -958,10 +958,8 @@ def main():
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
-    with open("report.json", "w", encoding="utf-8") as out:
+    with open(output, "w", encoding="utf-8") as out:
         json.dump(report, out, indent=2)
-
-    print("✅ Wrote report.json")
 
 
 if __name__ == "__main__":

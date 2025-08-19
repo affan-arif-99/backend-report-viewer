@@ -1,7 +1,7 @@
 # generate_pdf.py
 from playwright.sync_api import sync_playwright
 
-def main():
+def main(input_path: str, output_filename: str, footer_tmpl: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -26,7 +26,7 @@ def main():
         page.emulate_media(media="print")
         
         # 2. Navigate and wait for your app’s CSS to settle
-        page.goto("file:///dist/index.html", wait_until="networkidle")
+        page.goto(input_path, wait_until="networkidle")
         # page.goto("http://localhost:5173", wait_until="networkidle")
 
         # 3. Inject zero‑margin @page rules *after* navigation
@@ -36,51 +36,16 @@ def main():
         
         # 5. Export with zero margins
         page.pdf(
-            path="medical-report-ingested.pdf",
+            path=output_filename,
             format="A4",
             print_background=True,
             margin={"top":"0mm","bottom":"1mm","left":"0mm","right":"0mm"},
             prefer_css_page_size=True,
             display_header_footer=True,
-            footer_template="""
-                <div style="
-                    font-size: 10px;
-                    color: #6B7280;      /* Tailwind text-gray-500 */
-                    padding-left: 58px;
-                    padding-right: 58px;
-                    width: 100%;
-                    box-sizing: border-box;
-                ">
-                    <div style="
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: flex-start;
-                    width: 100%;
-                    ">
-                    <div style="line-height: 1.2;">
-                        <div>uMETHOD Health, Inc.</div>
-                        <div>9650 Falls of Neuse Road, Suite 138‑146</div>
-                        <div>Raleigh, NC 27615</div>
-                        <div style="color: #3B82F6;">support@umethod.com</div>
-                    </div>
-                    <div style="text-align: right; line-height: 1.2;">
-                        <div>Copyright © 2013‑2025 uMETHOD Health, Inc.</div>
-                        <div>All Rights Reserved. Confidential.</div>
-                    </div>
-                    </div>
-                    <div style="
-                    text-align: center;
-                    margin-top: 4mm;
-                    font-size: 9px;
-                    ">
-                    <span class="pageNumber"></span> / <span class="totalPages"></span>
-                    </div>
-                </div>
-                """
+            footer_template=footer_tmpl
         )
 
         browser.close()
-    print("✅ PDF saved as medical-report.pdf")
 
 if __name__ == "__main__":
     main()
