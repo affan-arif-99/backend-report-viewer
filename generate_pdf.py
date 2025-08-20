@@ -14,13 +14,13 @@ def main(input_path: str, output_filename: str, footer_tmpl: str):
         )
         page = browser.new_page(viewport={"width":1200, "height":1600})
 
-        #  # Log every request
-        # page.on("request", lambda request: print(f"➡️ {request.method} {request.url}"))
+         # Log every request
+        page.on("request", lambda request: print(f"➡️ {request.method} {request.url}"))
 
-        # # Log every response
-        # page.on("response", lambda response: print(f"⬅️ {response.status} {response.url}"))
+        # Log every response
+        page.on("response", lambda response: print(f"⬅️ {response.status} {response.url}"))
         
-        # page.on("console", lambda msg: print(f"[browser console] {msg.type}: {msg.text}"))
+        page.on("console", lambda msg: print(f"[browser console] {msg.type}: {msg.text}"))
     
         # 1. Emulate print so @page rules will be applied
         page.emulate_media(media="print")
