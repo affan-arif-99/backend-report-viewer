@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: report_viewer
+    volumes:
+      - .:/usr/src/app   # Mount current project folder into the container
+    working_dir: /usr/src/app
+    command: python orc_parallel.py   # Run your script
