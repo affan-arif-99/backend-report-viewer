@@ -12,7 +12,7 @@ DIST_DIR       = "output"
 HTML_FILE      = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
 REPORT_JSON    = os.path.join(DIST_DIR, "report.json")
 PDF_OUTPUT     = "medical-report.pdf"  # All threads will write to this file
-BUILD_PATH     = "file:///dist/index.html"
+BUILD_PATH     = os.path.abspath("dist/index.html")
 HOST, PORT     = "0.0.0.0", 5173
 URL            = f"http://localhost:{PORT}"
 
@@ -92,7 +92,8 @@ if __name__ == "__main__":
     threads = []
     for i in range(2):
         pdf_file = os.path.join(DIST_DIR, f"medical-report_{i+1}.pdf")
-        t = threading.Thread(target=generate_pdf, args=(BUILD_PATH, pdf_file,))
+        html_file = f"file:///{BUILD_PATH}"
+        t = threading.Thread(target=generate_pdf, args=(html_file, pdf_file,))
         threads.append(t)
         t.start()
 
