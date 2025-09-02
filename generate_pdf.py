@@ -6,10 +6,10 @@ def main(input_path: str, output_filename: str, footer_tmpl: str):
         browser = p.chromium.launch(
             headless=True,
             args=[
-                "--disable-web-security",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--allow-running-insecure-content",
-                "--allow-file-access-from-files"   # allows file:// requests
+                # "--disable-web-security",
+                # "--disable-features=IsolateOrigins,site-per-process",
+                # "--allow-running-insecure-content",
+                # "--allow-file-access-from-files"   # allows file:// requests
             ]
         )
         page = browser.new_page(viewport={"width":1200, "height":1600})
@@ -27,7 +27,6 @@ def main(input_path: str, output_filename: str, footer_tmpl: str):
         
         # 2. Navigate and wait for your app’s CSS to settle
         page.goto(input_path, wait_until="networkidle")
-        # page.goto("http://localhost:5173", wait_until="networkidle")
 
         # 3. Inject zero‑margin @page rules *after* navigation
         page.add_style_tag(content="""

@@ -3,34 +3,21 @@ import os
 import threading
 import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+import socketserver
 from extract import extract_preface, extract_health_report, extract_action_plan
 from generate_pdf import main as generate
 from extract import main as extract
 
 # —— CONFIG —————————————————————————————————————————————————————————————
-DIST_DIR       = "output"
+DIST_DIR       = "dist"
+OUTPUT_DIR       = "output"
 HTML_FILE      = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
-REPORT_JSON    = os.path.join(DIST_DIR, "report.json")
+REPORT_JSON    = os.path.join(OUTPUT_DIR, "report.json")
 PDF_OUTPUT     = "medical-report.pdf"  # All threads will write to this file
 BUILD_PATH     = os.path.abspath("dist/index.html")
 HOST, PORT     = "0.0.0.0", 5173
-URL            = f"http://localhost:{PORT}"
+URL            = f"http://{HOST}:{PORT}"
 
-# —— EXTRACTION LOGIC (inlined from extract.py) ————————————————————————
-def build_report():
-    """Parses the HTML and writes report.json inside dist/"""
-    print(f"⏳ Parsing {HTML_FILE}")
-    extract(HTML_FILE, REPORT_JSON)
-    print(f"✅ Wrote {REPORT_JSON}")
-
-# —— SERVER LOGIC ——————————————————————————————————————————————————————————
-def serve_dist():
-    os.chdir(DIST_DIR)
-    srv = HTTPServer((HOST, PORT), SimpleHTTPRequestHandler)
-    print(f"🚀 Serving {DIST_DIR} at http://localhost:{PORT}")
-    srv.serve_forever()
-
-# —— PDF GENERATION (inlined from generate_pdf.py) ——————————————————————
 FOOTER_TMPL = """
 <div style="
     font-size: 10px;
@@ -67,37 +54,64 @@ FOOTER_TMPL = """
 </div>
 """
 
+# —— EXTRACTION LOGIC (inlined from extract.py) ————————————————————————
+def build_report():
+    """Parses the HTML and writes report.json inside dist/"""
+    print(f"⏳ Parsing {HTML_FILE}")
+    extract(HTML_FILE, REPORT_JSON)
+    print(f"✅ Wrote {REPORT_JSON}")
+
+# —— SERVER MANAGEMENT ——————————————————————————————————————————————————
+class CustomHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DIST_DIR, **kwargs)
+
+def start_server():
+    """Start HTTP server in background thread"""
+    httpd = socketserver.TCPServer((HOST, PORT), CustomHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    print(f"🚀 Serving {DIST_DIR} at {URL}")
+    return httpd, thread
+
+def stop_server(httpd):
+    """Stop HTTP server cleanly"""
+    print("🛑 Stopping server...")
+    httpd.shutdown()
+    httpd.server_close()
+
+# —— PDF GENERATION (inlined from generate_pdf.py) ——————————————————————
 def generate_pdf(build_path, pdf_output):
     print(f"📑 Generating PDF from {build_path} …")
     generate(build_path, pdf_output, FOOTER_TMPL)
     print(f"✅ PDF saved as {pdf_output}")
 
 # —— MAIN ORCHESTRATION ——————————————————————————————————————————————
-import threading
-import time
-
 if __name__ == "__main__":
     total_start = time.perf_counter()
 
-    if not os.path.exists("output"):
-        os.makedirs("output")
-    
-    # Uncomment these steps if needed:
-    build_report()
-    # t = threading.Thread(target=serve_dist, daemon=True)
-    # t.start()
-    # time.sleep(1)
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
 
-    # Run generate_pdf in parallel on 2 threads with unique PDF_OUTPUT names
+    # Step 1. Build report.json
+    build_report()
+
+    # Step 2. Start server
+    httpd, server_thread = start_server()
+
+    # Step 3. Run PDF generation in parallel
     threads = []
     for i in range(2):
-        pdf_file = os.path.join(DIST_DIR, f"medical-report_{i+1}.pdf")
-        html_file = f"file:///{BUILD_PATH}"
-        t = threading.Thread(target=generate_pdf, args=(html_file, pdf_file,))
+        pdf_file = os.path.join(OUTPUT_DIR, f"medical-report_{i+1}.pdf")
+        html_file = URL
+        t = threading.Thread(target=generate_pdf, args=(html_file, pdf_file))
         threads.append(t)
         t.start()
 
     for t in threads:
         t.join()
+
+    # Step 4. Stop server
+    stop_server(httpd)
 
     print(f"🎉 Total script time: {time.perf_counter() - total_start:.2f}s")
