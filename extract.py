@@ -2,6 +2,7 @@
 import json
 import re
 import time
+import os
 
 from bs4 import BeautifulSoup, Tag, NavigableString
 
@@ -93,7 +94,8 @@ def extract_health_report(soup):
         # collect every <small> text, strip punctuation
         ann = [s.get_text(strip=True).strip("() ") for s in td.find_all("small")]
 
-        key = "".join(ch for ch in h if ch.isalnum())
+        # key = "".join(ch for ch in h if ch.isalnum())
+        key = h
         overview[key] = {
             "value": base,
             "annotations": ann
@@ -200,17 +202,15 @@ def extract_action_plan(soup):
             # --- Parse reasoning column into structured entries ---
             reasoning_td = cols[3]
             # get text with explicit separators for <br>
-            text = reasoning_td.get_text(separator="\n", strip=True)
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-
-            reasoning_entries = []
+            text = reasoning_td.get_text(separator="\n\r", strip=True)
+            lines = [line.strip() for line in text.split("\n\r") if line.strip()]
+            actions = []
             current_action = None
+            reasons_list = []
+
             for line in lines:
-                # lines ending with ':' are the action label
-                if line.endswith(":"):
-                    current_action = line.rstrip(":")
-                # bullet lines start with '•' or '-' or digits
-                elif line.startswith("•") or line.startswith("-"):
+                # Treat as a reason (bullet or not)
+                if line.startswith("•") or line.startswith("-"):
                     bullet = line.lstrip("•- ").strip()
                     # split name and level in parentheses
                     m = re.match(r"(.+?)\s*\((.+)\)", bullet)
@@ -218,31 +218,35 @@ def extract_action_plan(soup):
                         name, level = m.groups()
                     else:
                         name, level = bullet, ""
-                    reasoning_entries.append({
-                        "action": current_action or "",
+                    reasons_list.append({
                         "name": name.strip(),
                         "currentLevel": level.strip()
                     })
                 else:
-                    m2 = re.match(r"(.+?)\s*\((.+)\)\.?", line)
-                    if m2:
-                        action_text, usage = m2.groups()
-                        reasoning_entries.append({
-                            "action": action_text.strip(),
-                            "currentUsage": usage.strip()
+                    # Save previous action if exists
+                    if current_action is not None:
+                        actions.append({
+                            "action": current_action,
+                            "reasons": reasons_list
                         })
-                    else:
-                        # fallback: treat any other non-bullet line as a new action
-                        reasoning_entries.append({
-                            "action": line,
-                            "currentUsage": ""
-                        })
+                    current_action = line.rstrip(":").strip()
+                    reasons_list = []
+
+            # Add the last action if any
+            if current_action is not None:
+                actions.append({
+                    "action": current_action,
+                    "reasons": reasons_list
+                })
+                
+            # print("Current action =>", current_action)
+            # print("Reasons =>", reasons)
 
             meds.append({
                 "medication":    medication,
                 "dosageDetails": dosageDetails,
                 "alreadyTaking": alreadyTaking,
-                "reasoning":     reasoning_entries,
+                "reasoning": actions,
                 "guidance":      guidance
             })
 
@@ -276,12 +280,14 @@ def extract_action_plan(soup):
             reasoning_td = cols[2]
             # get text with explicit separators for <br>
             text = reasoning_td.get_text(separator="\n\r", strip=True)
-            current_action, reasons = text.split(":", 1) if ":" in text else [text, ""]
-            lines = [line.strip() for line in reasons.split("\n\r") if line.strip()]
+            lines = [line.strip() for line in text.split("\n\r") if line.strip()]
+            
+            actions = []
+            current_action = None
+            reasons_list = []
 
-            reasoning_entries = []
             for line in lines:
-                # bullet lines start with '•' or '-' or digits
+                # Treat as a reason (bullet or not)
                 if line.startswith("•") or line.startswith("-"):
                     bullet = line.lstrip("•- ").strip()
                     # split name and level in parentheses
@@ -290,32 +296,33 @@ def extract_action_plan(soup):
                         name, level = m.groups()
                     else:
                         name, level = bullet, ""
-                    reasoning_entries.append({
+                    reasons_list.append({
                         "name": name.strip(),
                         "currentLevel": level.strip()
                     })
                 else:
-                    m2 = re.match(r"(.+?)\s*\((.+)\)\.?", line)
-                    if m2:
-                        action_text, usage = m2.groups()
-                        reasoning_entries.append({
-                            "action": action_text.strip(),
-                            "currentUsage": usage.strip()
+                    # Save previous action if exists
+                    if current_action is not None:
+                        actions.append({
+                            "action": current_action,
+                            "reasons": reasons_list
                         })
-                    else:
-                        # fallback: treat any other non-bullet line as a new action
-                        reasoning_entries.append({
-                            "action": line,
-                            "currentUsage": ""
-                        })
+                    current_action = line.rstrip(":").strip()
+                    reasons_list = []
+
+
+
+            # Add the last action if any
+            if current_action is not None:
+                actions.append({
+                    "action": current_action,
+                    "reasons": reasons_list
+                })
 
             ap["supplements"]["meds"].append({
                 "medication":    medication,
                 "dosageDetails": dosageDetails,
-                "reasoning": {
-                    "action": current_action,
-                    "entries": reasoning_entries
-                },
+                "reasoning": actions,
                 "guidance":      guidance
             })
     
@@ -937,9 +944,12 @@ def _find_following_table_with_headers(start: Tag, headers: list[str]) -> Tag | 
 #         "items": items
 #     }
 
-def main(path: str, output: str):
+OUTPUT_DIR     = "output"
+HTML_FILE      = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
+REPORT_JSON    = os.path.join(OUTPUT_DIR, "report.json")
+
+def main(path: str = HTML_FILE, output: str = REPORT_JSON):
     # Read as raw bytes so BeautifulSoup can detect encoding
-    path = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
     with open(path, 'rb') as f:
         raw = f.read()
 
