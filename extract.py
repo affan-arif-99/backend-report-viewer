@@ -5,6 +5,9 @@ import time
 import os
 
 from bs4 import BeautifulSoup, Tag, NavigableString
+import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+nltk.download('punkt_tab')
 
 NBSP = "\xa0"
 BULLET_CHARS = ("•", "\u2022")
@@ -822,6 +825,266 @@ def _find_following_table_with_headers(start: Tag, headers: list[str]) -> Tag | 
             break
     return None
 
+def extract_allergies(soup):
+    """
+    Extracts the Known Allergies section as:
+    {
+        "title": ...,
+        "description": ...,
+        "headers": [...],
+        "rows": [
+            { "type": ..., "allergen": ..., "reaction": ... },
+            ...
+        ]
+    }
+    """
+    allergies_div = soup.find("div", id="Allergies")
+    if not allergies_div:
+        return None
+
+    # Title
+    title_tag = allergies_div.find("h3", id="ShdMrtAllergies")
+    title = title_tag.get_text(" ", strip=True) if title_tag else "Known Allergies"
+
+    # Description: first <p> after the title with non-empty text
+    description = ""
+    for p in allergies_div.find_all("p"):
+        desc = p.get_text(" ", strip=True)
+        if desc:
+            description = desc
+            break
+
+    # Table
+    table = allergies_div.find("table")
+    headers = []
+    rows = []
+    if table:
+        ths = table.find_all("th")
+        headers = [th.get_text(" ", strip=True) for th in ths]
+        for tr in table.find_all("tr")[1:]:
+            tds = tr.find_all("td")
+            if len(tds) == 3:
+                row = {
+                    "type": tds[0].get_text(" ", strip=True),
+                    "allergen": tds[1].get_text(" ", strip=True),
+                    "reaction": tds[2].get_text(" ", strip=True)
+                }
+                rows.append(row)
+
+    return {
+        "title": title,
+        "description": description,
+        "headers": headers,
+        "rows": rows
+    }
+
+def extract_reported_problems(soup):
+    """
+    Extracts the Current Comorbidities section as:
+    {
+        "title": ...,
+        "description": ...,
+        "headers": [...],
+        "rows": [
+            { "comorbidity": ..., "dateDiagnosed": ... },
+            ...
+        ]
+    }
+    """
+    reported_div = soup.find("div", id="ReportedProblems")
+    if not reported_div:
+        return None
+
+    # Title
+    title_tag = reported_div.find("h3", id="ShdMrtReportedProblems")
+    title = title_tag.get_text(" ", strip=True) if title_tag else "Current Comorbidities"
+
+    # Description: first <p> after the title with non-empty text
+    description = ""
+    for p in reported_div.find_all("p"):
+        desc = p.get_text(" ", strip=True)
+        if desc:
+            description = desc
+            break
+
+    # Table
+    table = reported_div.find("table")
+    headers = []
+    rows = []
+    if table:
+        ths = table.find_all("th")
+        headers = [th.get_text(" ", strip=True) for th in ths]
+        for tr in table.find_all("tr")[1:]:
+            tds = tr.find_all("td")
+            if len(tds) == 2:
+                row = {
+                    "comorbidity": tds[0].get_text(" ", strip=True),
+                    "dateDiagnosed": tds[1].get_text(" ", strip=True)
+                }
+                rows.append(row)
+
+    return {
+        "title": title,
+        "description": description,
+        "headers": headers,
+        "rows": rows
+    }
+    
+def classify_inclusion(text):
+    """
+    Returns 'include' if text is about including/consuming,
+    'avoid' if about avoiding/limiting, else ''.
+    """
+    include_keywords = {"include", "eat", "consume", "add", "use", "choose", "prefer", "increase"}
+    avoid_keywords = {"avoid", "limit", "reduce", "restrict", "eliminate", "decrease", "minimize", "not recommended", "stay away"}
+    text_lower = text.lower()
+    for sent in sent_tokenize(text_lower):
+        words = set(word_tokenize(sent))
+        if words & avoid_keywords:
+            return "avoid"
+        if words & include_keywords:
+            return "include"
+    return ""
+    
+def extract_dietary_recommendations(soup):
+    # Title
+    heading_tag = soup.find("h3", id="ShdMrpDiet")
+    heading = heading_tag.get_text(" ", strip=True) if heading_tag else "Dietary Recommendations"
+    page = heading_tag.parent if heading_tag else None
+
+    # Get the HTML string of the page up to the first <!-- End of Report_Dietary.html -->
+    page_html = str(page)
+    break_str = "<!-- End of Report_Dietary.html -->"
+    idx = page_html.find(break_str)
+    if idx != -1:
+        page_html = page_html[:idx]
+        page = BeautifulSoup(page_html, "html.parser")
+
+    results = []
+
+    for b in page.find_all("b"):
+        text = b.get_text(strip=True).lower()
+        if text in ["good fats", "bad fats"]:
+            key_text = b.get_text(strip=True)
+            prev = b.find_previous(string=True)
+            # Get the next text node after prev (if any)
+            next_text = None
+            if prev:
+                # prev is a NavigableString, so get its next_sibling that is also a NavigableString and not empty
+                sib = prev.next_sibling
+                while sib and (not isinstance(sib, str) or not sib.strip()):
+                    sib = sib.next_sibling
+                if isinstance(prev, str):
+                    next_text = prev + " " + key_text
+                if isinstance(sib, str):
+                    next_text = next_text + sib
+            parent_p = next_text
+            intro = parent_p
+            ul = b.find_next_sibling("ul") if parent_p else None
+            if ul:
+                items = [li.get_text(" ", strip=True) for li in ul.find_all("li")]
+                inclusion_type = ""
+                if items:
+                    # Separate text before ':' in each item
+                    split_items = []
+                    for item in items:
+                        if ':' in item:
+                            before_colon, after_colon = item.split(':', 1)
+                            split_items.append({
+                                "label": before_colon.strip(),
+                                "value": after_colon.strip()
+                            })
+                        else:
+                            split_items.append({
+                                "label": None,
+                                "value": item.strip()
+                            })
+                    items = split_items
+                    
+                    # Ensure punkt is downloaded
+                    try:
+                        nltk.data.find('tokenizers/punkt')
+                    except LookupError:
+                        nltk.download('punkt')
+
+                    # Determine if the description is about inclusion or avoidance
+                    inclusion_type = classify_inclusion(intro if intro else "")
+                    for item in items:
+                        item["inclusionType"] = inclusion_type
+
+                results.append({
+                    "title": key_text,
+                    "description": intro,
+                    "inclusionType": inclusion_type,
+                    "table": items
+                })
+                ul.decompose()
+                # parent_p.decompose()
+                
+    for p in page.find_all("p"):
+        bold = p.find("b")
+        if bold:
+            title = bold.get_text(strip=True)
+            description = p.get_text(" ", strip=True).strip()
+        else:
+            text = p.get_text(" ", strip=True)
+            if ":" in text:
+                parts = text.split(":", 1)
+                title = parts[0].strip()
+                description = parts[1].strip()
+            else:
+                title = text
+                description = ""
+        results.append({"title": title, "description": description})
+
+    return {
+        "heading": heading,
+        "items": results
+    }
+
+def extract_footnotes(soup):
+    """
+    Extracts the Footnotes section as:
+    {
+        "heading": ...,
+        "footnotes": [
+            { "number": ..., "text": ... },
+            ...
+        ]
+    }
+    """
+    # Find the heading
+    h2 = soup.find("h2", id="References")
+    heading = h2.get_text(" ", strip=True) if h2 else "Footnotes"
+
+    # Find the table with class "no_border" under the heading
+    table = None
+    if h2:
+        # Look for the first <table class="no_border"> after the heading
+        for el in h2.next_elements:
+            if isinstance(el, Tag) and el.name == "table" and "no_border" in el.get("class", []):
+                table = el
+                break
+            # Stop if we hit a new major section
+            if isinstance(el, Tag) and el.name in {"h1", "h2"} and el is not h2:
+                continue
+
+    footnotes = []
+    if table:
+        for tr in table.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) == 2:
+                # Extract number (remove anchor and dot)
+                number = tds[0].get_text(" ", strip=True).replace(".", "").strip()
+                # Extract text (collapse whitespace)
+                text = " ".join(tds[1].stripped_strings)
+                footnotes.append(text)
+
+    return {
+        "heading": heading,
+        "footnotes": footnotes
+    }
+
 # def extract_lifestyle(soup: BeautifulSoup) -> dict | None:
 #     """
 #     Produces:
@@ -944,6 +1207,9 @@ def _find_following_table_with_headers(start: Tag, headers: list[str]) -> Tag | 
 #         "items": items
 #     }
 
+
+
+
 OUTPUT_DIR     = "output"
 HTML_FILE      = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
 REPORT_JSON    = os.path.join(OUTPUT_DIR, "report.json")
@@ -963,8 +1229,11 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
         "lifestyle": extract_lifestyle(soup),
         "nutrition": extract_nutrition(soup),
         "currentMedication": extract_current_medication(soup),
-        "cognitiveFunction": extract_cognitive_function(soup)
-        
+        "cognitiveFunction": extract_cognitive_function(soup),
+        "allergies": extract_allergies(soup),
+        "reportedProblems": extract_reported_problems(soup),
+        "dietaryRecommendations": extract_dietary_recommendations(soup),
+        "footnotes": extract_footnotes(soup)
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
