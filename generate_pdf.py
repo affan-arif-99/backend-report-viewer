@@ -26,6 +26,7 @@ def main(input_path: str, output_filename: str, footer_tmpl: str):
         page.emulate_media(media="print")
         
         # 2. Navigate and wait for your app’s CSS to settle
+        print(f"Navigating to {input_path} …")
         page.goto(input_path, wait_until="networkidle")
 
         # 3. Inject zero‑margin @page rules *after* navigation

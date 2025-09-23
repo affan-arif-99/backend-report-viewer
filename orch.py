@@ -16,7 +16,7 @@ import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
-from extract import extract_preface, extract_health_report, extract_action_plan
+from extract_patient import extract_preface, extract_health_report, extract_action_plan
 # —— CONFIG —————————————————————————————————————————————————————————————
 DIST_DIR       = "dist"
 HTML_FILE      = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
