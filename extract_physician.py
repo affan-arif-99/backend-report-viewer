@@ -2,12 +2,576 @@ import time
 import os
 import json
 from bs4 import BeautifulSoup
+import re
 
-def extract_preface(soup: BeautifulSoup) -> dict:
+def extract_intro(soup: BeautifulSoup) -> dict:
+    # Extract the title
+    title_tags = soup.select("#topmatter .head")
+    titles = [tag.get_text(strip=True) for tag in title_tags]
+
+    # Extract participant table data
+    participant_table = soup.select_one("#Participant table")
+    participant_data = {}
+    if participant_table:
+        for row in participant_table.find_all("tr"):
+            label = row.find("span", class_="label")
+            value = row.find("span", class_="value")
+            if label and value:
+                participant_data[label.get_text(strip=True).strip(":")] = value.get_text(strip=True)
+
+    # Extract practice table data
+    practice_table = soup.select_one("#Practice table")
+    practice_data = {}
+    if practice_table:
+        for row in practice_table.find_all("tr"):
+            label = row.find("span", class_="label")
+            value = row.find("span", class_="value")
+            b_elem = value.find("b")
+            bold_text = None
+            sibling_text = None
+            if b_elem:
+                # Extract bold text and its sibling, then remove from value text
+                bold_text = b_elem.get_text(strip=True)
+                sibling_text = b_elem.next_sibling.strip() if b_elem.next_sibling else ""
+
+                # Remove bold text and sibling from value text
+                full_value = value.get_text(strip=True)
+                cleaned_value = full_value.replace(bold_text, "", 1).replace(sibling_text, "", 1).strip()
+                value.string = cleaned_value
+                
+            if label and value:
+                practice_data[label.get_text(strip=True).strip(":")] = value.get_text(strip=True)
+            if bold_text:
+                practice_data[bold_text] = sibling_text
+                
+    # Overview table under “YourStatus”
+    status_tbl = soup.select_one("#SummaryDigest table")
+    ths = [th.get_text(strip=True) for th in status_tbl.find_all("th")]
+    tds = status_tbl.find_all("td")
+
+    overview = {}
+    for h, td in zip(ths, tds):
+        # base value = all text nodes except those inside <small>
+        base = "".join(
+            t for t in td.contents
+            if isinstance(t, str)
+        ).strip()
+        # collect every <small> text, strip punctuation
+        ann = [s.get_text(strip=True).strip("() ") for s in td.find_all("small")]
+
+        # key = "".join(ch for ch in h if ch.isalnum())
+        key = h
+        overview[key] = {
+            "value": base,
+            "annotations": ann
+        }
+
     return {
-        "title": "",
-        "intro": ""
+        "titles": titles,
+        "participant": participant_data,
+        "practice": practice_data,
+        "overview": overview
     }
+    
+def extract_cognitive_assessment(soup: BeautifulSoup) -> dict:
+    # Find the main cognitive assessment table by searching for the heading text
+    # heading = "Complete the following elements of Cognitive Assessment and Care Plan Services"
+    # main_b = soup.find("b", string=lambda s: s and heading in s)
+    
+    
+    main_b = soup.select_one("#SummaryDigest").find_next_sibling()
+    if not main_b:
+        return {}
+
+    # The table is the next sibling after the heading
+    main_table = main_b.find_next("table")
+    if not main_table:
+        return {}
+
+    results = {}
+
+    # Find all innermost <td> elements containing a <b><u> heading
+    for td in main_table.select("td td"):
+        b_u = td.find("b")
+        if not b_u or not b_u.find("u"):
+            continue
+        heading_text = b_u.get_text(strip=True).replace("\n", " ").replace("\r", " ")
+        # Remove trailing <br /> from heading
+        heading_text = heading_text.rstrip("<br />").strip()
+
+        # Find the <small> after the heading
+        small = td.find("small")
+        if not small:
+            continue
+        items = []
+        # Checkbox case: <img> followed by text
+        for img in small.find_all("img"):
+            next_text = img.next_sibling
+            if next_text and isinstance(next_text, str):
+                txt = next_text.strip()
+            if txt:
+                items.append({"text": txt, "checkbox": True})
+
+        # Score and plain text case: handle all text nodes (excluding <img>)
+        small_text = small.get_text(separator="\n")
+        lines = [l.strip() for l in small_text.split("•") if l.strip()]
+        for line in lines:
+            # Try to match "Label: <b>value</b>" pattern
+            if ":" in line:
+                parts = line.split(":")
+                label = parts[0].split(" ")[-1].strip()
+                rest = ":".join(parts[1:]).strip()
+                num_match = re.search(r"\b(\d+)\b", rest)
+                value = int(num_match.group(1)) if num_match else None
+                cleaned = line.strip()
+                if num_match:
+                    cleaned = cleaned.replace(str(value), "").strip()
+                    # cleaned = cleaned.replace(label, "")
+                    cleaned = cleaned.replace(":", "").strip()
+                    items.append({"text": cleaned, "value": value, "checkbox": False})
+                elif line:
+                    items.append({"text": line.split("\n")[-1].strip(), "checkbox": False})
+
+        results[heading_text] = items
+
+    return results
+
+
+def extract_code_and_question(td):
+    VALID_CODES = set("STOPBANG")
+    """
+    Return (code, question_text).
+    Tries:
+      1) find a single-letter <b> or <strong> tag that matches STOPBANG
+      2) fallback to a tolerant regex on the cell text
+    """
+    # 1) DOM-first: look for a bold/strong tag that contains exactly one letter in STOPBANG
+    for tag_name in ("b", "strong"):
+        tag = td.find(tag_name)
+        if tag:
+            letter = tag.get_text(strip=True)
+            if len(letter) == 1 and letter.upper() in VALID_CODES:
+                code = letter.upper()
+                # collect everything after that tag as the question
+                parts = []
+                for sib in tag.next_siblings:
+                    # next_siblings can be Tag, NavigableString, etc.
+                    if hasattr(sib, "get_text"):
+                        parts.append(sib.get_text(" ", strip=True))
+                    else:
+                        parts.append(str(sib).strip())
+                question = " ".join(p for p in parts if p).strip()
+                # remove a leading colon/other punctuation if present
+                question = re.sub(r'^[\s:：\-\)\.]+', '', question).strip()
+                # fallback: if nothing found after the tag, remove the tag text from full text
+                if not question:
+                    full = td.get_text(" ", strip=True)
+                    question = re.sub(r'^\s*' + re.escape(letter) + r'\s*[:：\-\)\.]*\s*', '', full).strip()
+                return code, question
+
+    # 2) Fallback to tolerant regex on the flattened text
+    text = td.get_text(" ", strip=True)
+    # allow leading whitespace, a single letter, optional separator (colon, unicode colon, dash, dot, right-paren)
+    m = re.match(r'^\s*([A-Za-z])\s*[:：\-\)\.]?\s*(.*)', text, flags=re.DOTALL)
+    if m and m.group(1).upper() in VALID_CODES:
+        return m.group(1).upper(), m.group(2).strip()
+    # 3) no code found
+    return None, text
+
+def extract_stopbang(soup: BeautifulSoup) -> dict:
+    result = {}
+    root = soup.select_one("#StopbangTable")
+    title = root.find("h3", id="AhdStopbang")
+    if title:
+        result["title"] = title.get_text(strip=True)
+
+    # 2. Preface (definition + risk rules)
+    preface_div = title.find_next("div")
+    preface_parts = {}
+    if preface_div:
+        paragraphs = preface_div.find_all("p", recursive=False)
+
+        if len(paragraphs) >= 1:
+            preface_parts["definition"] = paragraphs[0].get_text(" ", strip=True)
+
+        if len(paragraphs) >= 2:
+            preface_parts["risk_intro"] = paragraphs[1].get_text(" ", strip=True)
+
+        # Risk rules (inside <ul>)
+        risk_ul = preface_div.find("ul")
+        if risk_ul:
+            risk_rules = {}
+            for li in risk_ul.find_all("li", recursive=False):
+                text = li.get_text(" ", strip=True)
+                # Extract the part before ":" as the property name
+                if ":" in text:
+                    prop, rest = text.split(":", 1)
+                    key = prop.strip()
+                    risk_rules[key] = rest.strip()
+                else:
+                    risk_rules[text.strip().lower().replace(" ", "_")] = text
+            preface_parts["risk_rules"] = risk_rules
+
+    result["preface"] = preface_parts
+
+    # 3. Table parsing
+    table = root.find("table")
+    yes_count = 0
+    headers = [th.get_text(strip=True) for th in table.find_all("th")]
+    result["headers"] = headers
+
+    rows = []
+    for tr in table.find_all("tr")[1:]:
+        cells = tr.find_all("td")
+        if len(cells) == 3:
+            code, question = extract_code_and_question(cells[0])
+            answer = cells[1].get_text(" ", strip=True)
+            explanation = cells[2].get_text(" ", strip=True)
+            
+            if answer.lower() == "yes":
+                yes_count += 1
+            
+            row = {
+                "code": code,
+                "question": question,
+                "answer": answer,
+                "explanation": explanation,
+            }
+            rows.append(row)
+
+    result["table"] = rows
+
+    # 4. Postface parsing (risk + score)
+    postface_div = table.find_next("div")
+    if postface_div:
+        postface_text = postface_div.get_text(" ", strip=True)
+        result["postface"] = postface_text
+
+        # Extract score if present (e.g. "7 Yes answers")
+        score_match = re.search(r"(\d+)\s+Yes answers", postface_text)
+        if score_match:
+            result["score"] = int(score_match.group(1))
+            
+        if "high" in postface_text.lower():
+            result["risk_level"] = "High"
+        elif "intermediate" in postface_text.lower():
+            result["risk_level"] = "Intermediate"
+        elif "low" in postface_text.lower():
+            result["risk_level"] = "Low"
+            
+    result["calculated_score"] = yes_count
+    return result
+
+def extract_acb(soup: BeautifulSoup) -> dict:
+    # --- Extract Preface ---
+    root = soup.select_one("#ACBTable")
+    title = root.find("h3", id="AhdACB")
+    # --- Extract all <div> blocks ---
+    div = root.find_next("div")
+    paras = div.find_all("p", recursive=False) if div else []
+
+    # Root preface: everything before the criteria block
+    root_preface_parts = []
+    criteria_block = div
+    for d in paras:
+        text = d.get_text(" ", strip=True)
+        if text:
+            root_preface_parts.append(text)
+    root_preface = " ".join(root_preface_parts)
+
+    # Criteria preface: only the last div inside criteria before <ol>
+    criteria_preface_parts = []
+    if criteria_block:
+        for child in criteria_block.children:
+            if getattr(child, "name", None) == "ol":
+                break
+            if child.get_text(strip=True):
+                criteria_preface_parts = [child.get_text(" ", strip=True)]
+    criteria_preface = " ".join(criteria_preface_parts)
+
+    # Extract <li> items from criteria
+    criteria_items = []
+    if criteria_block:
+        for li in criteria_block.find_all("li"):
+            score = li.get("value")
+            desc = li.get_text(" ", strip=True)
+            if score:
+                criteria_items.append({
+                    "score": int(score),
+                    "description": desc
+                })
+
+    table = root.find("table")
+    # --- Extract Postface ---
+    postface_block = table.find_next("div") if table else None
+    postface_might_list = postface_block.find_next("ul") if postface_block else None
+    notes_list = postface_might_list.find_next("ul") if postface_might_list else None
+    postface_text_raw = postface_block.get_text(" ", strip=True) if postface_block else ""
+
+    # Split into "mights" and main text
+    mights = re.findall(r"(Might .*?\?)", postface_text_raw)
+    mights = [li.get_text(" ", strip=True) for li in postface_might_list.find_all("li")] if postface_might_list else []
+    main_postface = re.sub(r"(Might .*?\?)", "", postface_text_raw).strip()
+    notes = [li.get_text(" ", strip=True) for li in notes_list.find_all("li")] if notes_list else []
+
+    criteria = {
+        "preface": criteria_preface,
+        "items": criteria_items,
+    }
+
+    # --- Extract Table ---
+    headers = [th.get_text(strip=True) for th in table.find_all("th") if th.get_text(strip=True).lower() != "dosage"]
+    
+    table_obj = {
+        "headers": headers
+    }
+    table_data = []
+    if table:
+        rows = table.find_all("tr")[1:]  # skip header
+        for row in rows:
+            cols = [td.get_text(" ", strip=True) for td in row.find_all("td")]
+            if len(cols) == 4:
+                medication, dosage, score, alternatives = cols
+                # Split alternatives, clean "or"
+                alt_list = [alt.strip() for alt in re.split(r",|\bor\b", alternatives)]
+                alt_list = [a for a in alt_list if a]
+                table_data.append({
+                    "medication": medication,
+                    "dosage": dosage,
+                    "score": int(score),
+                    "alternatives": alt_list
+                })
+                
+    table_obj["data"] = table_data
+
+    # --- Extract Totals & Notes ---
+    totals = {}
+    if postface_block:
+        text = postface_block.get_text(" ", strip=True)
+        total_score_match = re.search(r"total ACB score is\s+(\d+)", text, re.I)
+        definite_count_match = re.search(r"of which there are currently\s+(\d+)", text, re.I)
+        mmse_effect_match = re.search(r"may be lowering an MMSE score by\s+(\d+)", text, re.I)
+
+        totals = {
+            "total_acb_score": int(total_score_match.group(1)) if total_score_match else None,
+            "definite_anticholinergics": int(definite_count_match.group(1)) if definite_count_match else None,
+            "mmse_effect": int(mmse_effect_match.group(1)) if mmse_effect_match else None,
+        }
+
+    # --- Final JSON-like structure ---
+    acb_data = {
+        "title": title.get_text(strip=True) if title else "",
+        "root_preface": root_preface,
+        "criteria": criteria,
+        "medications": table_obj,
+        "totals": totals,
+        "postface": {
+            "text": main_postface,
+            "mights": mights,
+            "notes": notes
+        }
+    }
+    return acb_data
+
+def extract_leqembi(soup: BeautifulSoup) -> dict:
+    result = {}
+
+    # --- Extract title ---
+    root = soup.select_one("#Aduhelm")
+    h3 = root.select_one("#AhdAduhelm")
+    if h3:
+        result["heading"] = h3.get_text(strip=True)
+
+    # # --- Preface ---
+    # preface_divs = root.find_all("p", recursive=False)
+    # if preface_divs:
+    #     prefaces = [p.get_text(" ", strip=True) for p in preface_divs if p.get_text(strip=True)]
+    #     if len(prefaces) > 1:
+    #         result["preface"] = " ".join(prefaces[:-1])
+    #         conclusion = prefaces[-1].lstrip("Conclusion:").strip()
+    #         result["conclusion"] = conclusion
+    #     else:
+    #         result["preface"] = prefaces[0]
+    
+    # Preface (first <p> before any tables)
+    legend_table = None
+    paragraphs = []
+    preface_divs = root.find_all("p", recursive=False)
+    for p in preface_divs[0:-1]:  # all except last
+        table = p.find("table")
+        if table and not legend_table:
+            legend_table = table
+            if legend_table:
+                # Remove the table from the paragraph text
+                text = p.get_text(" ", strip=True)
+                table_text = legend_table.get_text(" ", strip=True)
+                cleaned_text = text.replace(table_text, "").strip()
+                if cleaned_text:
+                    result["legend_preface"] = cleaned_text
+            continue
+        text = p.get_text(" ", strip=True)
+        if text:
+            paragraphs.append(text)
+    result["preface"] = paragraphs
+    conclusion = preface_divs[-1].get_text(" ", strip=True).lstrip("Conclusion:").strip()
+    result["conclusion"] = conclusion
+            
+    # Legend (first table with class="no_border")
+    legend = []
+    if legend_table:
+        for td in legend_table.find_all("td"):
+            text = td.get_text(" ", strip=True)
+            if text:  # filter empty
+                legend.append(text)
+    result["legend"] = legend
+
+    # --- Criteria Table ---
+    criteria_tables = root.find_all("table")
+    criteria_table = criteria_tables[1] if len(criteria_tables) > 1 else None
+    headers = [th.get_text(strip=True) for th in criteria_table.find_all("th")]
+    result["headers"] = headers
+
+    criteria = []
+    if criteria_table:
+        rows = criteria_table.find_all("tr")[1:]  # skip header
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) >= 3:
+                crit_text = cols[0].get_text(" ", strip=True)
+                status = cols[1].get_text(" ", strip=True)
+                reasoning = cols[2].decode_contents()
+
+                # normalize reasoning list if nested table
+                nested_items = cols[2].find_all("td", class_="no_border")
+                if nested_items:
+                    reasoning = [td.decode_contents() for td in nested_items if td.get_text(strip=True).lstrip("• ").strip()]
+
+                criteria.append({
+                    "criterion": crit_text,
+                    "status": status,
+                    "reasoning": reasoning
+                })
+    result["criteria"] = criteria
+
+    # --- Postface + Conclusion ---
+    postface_parts = []
+    conclusion_texts = []
+    conclusion = soup.find("b", string=re.compile("Conclusion", re.I))
+    if conclusion:
+        parent = conclusion.find_parent("p")
+        if parent:
+            conclusion_texts.append(parent.get_text(" ", strip=True))
+            # get sibling paragraphs
+            for sib in parent.find_all_next("p"):
+                txt = sib.get_text(" ", strip=True)
+                if txt:
+                    conclusion_texts.append(txt)
+
+    if conclusion_texts:
+        # detect eligibility
+        joined_conclusion = " ".join(conclusion_texts).lower()
+        if "does not meet" in joined_conclusion or "ineligible" in joined_conclusion or "not eligible" in joined_conclusion:
+            result["eligibility"] = "Ineligible"
+        elif "meets" in joined_conclusion or "eligible" in joined_conclusion:
+            result["eligibility"] = "Eligible"
+        else:
+            result["eligibility"] = "Unknown"
+
+        # result["postface"] = conclusion_texts
+
+    return result
+
+def extract_fall_risk(soup: BeautifulSoup) -> dict:
+    result = {}
+    heading = soup.select_one("#ShdMrtdFallRisk")
+    result["heading"] = heading.get_text(" ", strip=True)
+    
+    div = heading.find_next_sibling("div")
+    if div:
+        paragraphs = [p.get_text(" ", strip=True) for p in div.find_all("p", recursive=False)]
+        result["preface"] = paragraphs
+
+        # headers = [th.get_text(" ", strip=True) for th in heading.find_all_next("th")] if heading else []
+        headers = []
+        columnTypes = []
+        for th in div.find_all("th"):
+            text = th.get_text(strip=True)
+            # Remove any pattern like (- ... =) or ( ... =) from the header text
+            cleaned_text = re.sub(r'\(\s*[^()]*=\s*[^()]*\)', '', text).strip()
+            if cleaned_text.lower() != "dosage":
+                headers.append(cleaned_text)
+                if "text-align:center" in th.decode_contents().lower():
+                    columnTypes.append("numeric")
+                else:
+                    columnTypes.append("alpha")
+                    
+        result["columnTypes"] = columnTypes
+        result["headers"] = headers
+        
+        medications = []
+        total_score = 0
+        for tr in div.find_all("tr")[1:] if div else []:
+            medication = {}
+            tds = tr.find_all("td")
+            if len(tds) >= 3:
+                medication["name"] = tds[0].get_text(" ", strip=True)
+                medication["dosage"] = tds[1].get_text(" ", strip=True)
+                score = tds[2].get_text(" ", strip=True)
+                medication["score"] = score
+                total_score += int(score or 0)
+
+            medications.append(medication)
+
+        result["medications"] = medications
+        result["totalScore"] = total_score
+        
+    return result
+
+def extract_additional_diagnostics(soup: BeautifulSoup) -> dict:
+    root = soup.select_one("#AdditionalDiagnostics")
+    heading = root.select_one("#ShdMrtdTestRequests")
+    table = root.find("table")
+    result = {
+        "heading": heading.get_text(strip=True) if heading else "",
+        "segments": {}
+    }
+    
+    if not table:
+        return result
+    
+    headers = [th.get_text(strip=True) for th in table.find_all("th")]
+    result["headers"] = headers
+    
+    current_segment = None
+    segments = {}
+    
+    for tr in table.find_all("tr"):
+        # Check if this is a separator row
+        sep_td = tr.find("td", class_="SepFindings")
+        if sep_td:
+            # This is a segment header
+            segment_name = sep_td.get_text(strip=True)
+            current_segment = segment_name
+            segments[current_segment] = []
+            continue
+        
+        # Skip header row
+        if tr.find("th"):
+            continue
+            
+        # Regular data row
+        tds = tr.find_all("td")
+        if len(tds) >= 2 and current_segment:
+            test_name = tds[0].get_text(strip=True)
+            explanation = tds[1].get_text(strip=True)
+            
+            segments[current_segment].append({
+                "test": test_name,
+                "explanation": explanation
+            })
+    
+    result["segments"] = segments
+    return result
 
 OUTPUT_DIR     = "output"
 HTML_FILE      = "Physician_Summary_1-00_JANEADOE_2024-11-02.html"
@@ -22,7 +586,13 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
     soup = BeautifulSoup(raw, 'html.parser')
 
     report = {
-        "preface": extract_preface(soup),
+        "intro": extract_intro(soup),
+        "cognitive_assessment": extract_cognitive_assessment(soup),
+        "stopbang": extract_stopbang(soup),
+        "acb": extract_acb(soup),
+        "leqembi": extract_leqembi(soup),
+        "fall_risk": extract_fall_risk(soup),
+        "additional_diagnostics": extract_additional_diagnostics(soup),
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
