@@ -1,0 +1,15 @@
+term,synonyms,category
+Creatinine,creatinine level;serum creatinine,lab
+BUN,blood urea nitrogen;urea nitrogen,lab
+Monocytes,,lab
+Vitamin B12,cobalamin;vitamin b 12,lab
+TSH,thyroid stimulating hormone,lab
+p-tau181,ptau181;phosphorylated tau,lab
+eGFR,estimated glomerular filtration rate,lab
+Chronic kidney disease,CKD;renal failure,disease
+Urinary tract congestion,urinary infection;UTI;bladder inflammation,disease
+AD-Detect,AD biomarker;Alzheimer detection,lab
+obstructive sleep apnea,OSA,disease
+fasting Insulin,,lab
+platelet count,,lab
+Carbon Dioxide,,lab

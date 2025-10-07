@@ -3,6 +3,7 @@ import os
 import json
 import re
 from bs4 import BeautifulSoup
+from utils import load_biomedical_terms, extract_risk_tokens
 import re
 
 def extract_intro(soup: BeautifulSoup) -> dict:
@@ -565,10 +566,14 @@ def extract_additional_diagnostics(soup: BeautifulSoup) -> dict:
         if len(tds) >= 2 and current_segment:
             test_name = tds[0].get_text(strip=True)
             explanation = tds[1].get_text(strip=True)
+            terms = load_biomedical_terms(os.path.join(os.path.dirname(__file__), "biomedical_terms.csv"))
+            findings = extract_risk_tokens(explanation, terms)
+            tokens = [f for f in findings if f.get("name") != None]  # filter out empty findings
             
             segments[current_segment].append({
                 "test": test_name,
-                "explanation": explanation
+                "explanation": explanation,
+                "tokens": tokens
             })
     
     result["segments"] = segments
