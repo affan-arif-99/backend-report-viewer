@@ -1212,7 +1212,8 @@ def extract_footnotes(soup):
 
 OUTPUT_DIR     = "output"
 HTML_FILE      = "Report_Participant_1-00_JANEADOE_2024-11-02.html"
-REPORT_JSON    = os.path.join(OUTPUT_DIR, "report.json")
+# REPORT_JSON    = os.path.join(OUTPUT_DIR, "report.json")
+REPORT_JSON    = os.path.join(OUTPUT_DIR, "patient_report.json")
 
 def main(path: str = HTML_FILE, output: str = REPORT_JSON):
     # Read as raw bytes so BeautifulSoup can detect encoding

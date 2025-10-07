@@ -1,6 +1,7 @@
 import time
 import os
 import json
+import re
 from bs4 import BeautifulSoup
 import re
 
@@ -573,6 +574,475 @@ def extract_additional_diagnostics(soup: BeautifulSoup) -> dict:
     result["segments"] = segments
     return result
 
+def extract_cognitive_factors(soup: BeautifulSoup) -> dict:
+    categoty_map = {
+        "Green": "Optimal",
+        "Yellow": "Caution",
+        "LightSalmon": "At Risk",
+        "LightGray": "Unknown"
+    }
+    # Locate the "Analysis of Cognitive Factors" header
+    analysis_section = soup.find("h2", string="Analysis of Cognitive Factors")
+    
+    # If the section is not found, return an empty structure
+    if not analysis_section:
+        return {"title": "Analysis of Cognitive Factors", "healthStatusSections": []}
+    
+    # Find the table that follows the header
+    analysis_table = analysis_section.find_next("table")
+    
+    # List to store each cognitive factor section
+    status_sections = []
+    
+    # Categories to loop through: Green, Yellow, Red, Gray
+    categories = ["Green", "Yellow", "LightSalmon", "LightGray"]
+    
+    for category in categories:
+        # Look for the row with the specific class that identifies the category
+        category_row = analysis_table.find("td", class_="tdBackground" + category + "Left")
+        
+        if category_row:
+            section = {
+                "title": categoty_map.get(category, "Unknown"),
+                "count": 0,  # Placeholder count, adjust if needed
+                "description": category_row.get_text(strip=True).split(":", 1)[-1].strip(),
+                "factors": []
+            }
+            
+            # Find the table with the factors under each category
+            factors_table = category_row.find_next("table")
+            if factors_table:
+                # Extract the factors from the table rows
+                factors = factors_table.find_all("tr", class_="no_border")
+                for factor in factors:
+                    factor_text = factor.get_text(strip=True)
+                    if factor_text:
+                        # Split factors based on the bullet character (•) and clean up
+                        split_factors = factor_text.split("•")
+                        for factor_item in split_factors:
+                            factor_cleaned = factor_item.strip()
+                            if factor_cleaned:  # Only add non-empty factors
+                                section["factors"].append(factor_cleaned)
+                                section["count"] = len(section["factors"])
+            
+            status_sections.append(section)
+    
+    return {
+        "title": "Analysis of Cognitive Factors",
+        "healthStatusSections": status_sections
+    }
+
+def parse_recommendation_sentence(sentence: str) -> dict:
+    # Pattern 1: "[Issue] is [modifier] target, at [value]"
+    pattern1 = r'^(.+?)\s+is\s+(?:far\s+)?(?:above|below)\s+target,\s+at\s+(.+?)[.\s]*$'
+    
+    # Pattern 2: "[Issue] calculated at [value] indicates..."
+    pattern2 = r'^(.+?)\s+calculated\s+at\s+([\d.]+)\s+'
+    
+    # Try pattern 1 first
+    match = re.match(pattern1, sentence, re.IGNORECASE)
+    
+    if match:
+        issue = match.group(1).strip()
+        value = match.group(2).strip()
+        
+        return {
+            "issue": issue,
+            "value": value,
+            "sentence": sentence
+        }
+    
+    # Try pattern 2
+    match = re.match(pattern2, sentence, re.IGNORECASE)
+    
+    if match:
+        issue = match.group(1).strip()
+        value = match.group(2).strip()
+        
+        return {
+            "issue": issue,
+            "value": value,
+            "sentence": sentence
+        }
+    
+    # If no pattern matches, just return the sentence
+    return {
+        "sentence": sentence
+    }
+
+def extract_medical_issues(soup: BeautifulSoup) -> dict:
+    # Find the "Additional Medical Issues" header
+    additional_issues_section = soup.find("h3", string="Additional Medical Issues")
+    
+    if not additional_issues_section:
+        return {"title": "Additional Medical Issues", "issues": []}
+    
+    # Fin the intro text that follows the header
+    intro_paragraph = additional_issues_section.find_next("p")
+    
+    # Find the table that follows the header
+    issues_table = additional_issues_section.find_next("table")
+    
+    # List to store all medical issues
+    issues = []
+    
+    # Extract the rows of the table that contain the medical issues
+    rows = issues_table.find_all("tr", class_=["odd", "even"])
+    
+    # Iterate over the rows to extract information
+    for row in rows:
+        issue_data = {}
+        # Find the issue name (e.g., "Plaques and Tangles")
+        issue_name = row.find("b")
+        if issue_name:
+            issue_data["issueName"] = issue_name.get_text(strip=True)
+        
+        # Find the table under each issue for the warnings and recommendations
+        issue_table = row.find("table", class_="no_border")
+        
+        if issue_table:
+            warnings = []
+            recommendations_raw = []
+            
+            # Extract all rows in the issue table
+            issue_rows = issue_table.find_all("tr", class_="no_border")
+            for issue_row in issue_rows:
+                # Find the warning (e.g., "AD-Detect™ p-tau181 is far above target")
+                warning_text = issue_row.find("td", width="65%")
+                if warning_text:
+                    warnings.append(warning_text.get_text(strip=True))
+                
+                # Find the recommendation (e.g., "Further evaluation is recommended")
+                recommendation_text = issue_row.find("td", width="32%")
+                if recommendation_text:
+                    recommendations_raw.append(recommendation_text.get_text(strip=True))
+
+            # NEW: structure recommendations
+            structured_recs = [parse_recommendation_sentence(r) for r in recommendations_raw]
+
+            issue_data["warnings"] = warnings
+            issue_data["recommendations"] = structured_recs
+
+            # Adding the extracted data for the issue
+            issue_data["warnings"] = warnings
+            issue_data["recommendations"] = structured_recs
+        
+        issues.append(issue_data)
+    
+    return {
+        "title": "Additional Medical Issues",
+        "issues": issues,
+        "intro": intro_paragraph.get_text(strip=True) if intro_paragraph else ""
+    }
+
+
+
+def extract_comorbidities(soup: BeautifulSoup) -> dict:
+    # Locate the "Current Comorbidities" header
+    comorbidities_section = soup.find("h3", string="Current Comorbidities")
+    
+    # If the section is not found, return an empty structure
+    if not comorbidities_section:
+        return {"title": "Current Comorbidities", "comorbidities": []}
+    
+    # Find the table that follows the header
+    comorbidities_table = comorbidities_section.find_next("table")
+    
+    # List to store the extracted comorbidities
+    comorbidities = []
+    
+    # Extract the rows of the table (skipping the header row)
+    rows = comorbidities_table.find_all("tr")[1:]  # Skipping header row
+    
+    for row in rows:
+        comorbidity_data = {}
+        
+        # Find the comorbidity name (first column)
+        comorbidity_name = row.find_all("td")[0].get_text(strip=True)
+        if comorbidity_name:
+            comorbidity_data["comorbidity"] = comorbidity_name
+        
+        # Find the diagnosis date (second column)
+        diagnosis_date = row.find_all("td")[1].get_text(strip=True)
+        if diagnosis_date:
+            comorbidity_data["dateDiagnosed"] = diagnosis_date
+        
+        # Add the comorbidity data to the list
+        if comorbidity_data:
+            comorbidities.append(comorbidity_data)
+    
+    return {
+        "title": "Current Comorbidities",
+        "comorbidities": comorbidities
+    }
+
+def extract_reported_and_inferred_comorbidities(soup: BeautifulSoup) -> dict:
+    # Locate the "Reported and Inferred Comorbidities" header
+    comorbidities_section = soup.find("h3", string="Reported and Inferred Comorbidities")
+    
+    # If the section is not found, return an empty structure
+    if not comorbidities_section:
+        return {"title": "Reported and Inferred Comorbidities", "data": []}
+    
+    # Extract the paragraph for the V28 implementation plan
+    paragraph = comorbidities_section.find_next("p")
+    paragraph_text = paragraph.get_text(strip=True) if paragraph else ""
+    
+    # Find the table that follows the header for V28 implementation plan
+    comorbidities_table = paragraph.find_next("table")
+    
+    # List to store the year-wise data for V24 and V28 percentages
+    v24_v28_data = []
+    
+    # Extract the rows of the table (skipping the header row)
+    rows = comorbidities_table.find_all("tr")[1:]  # Skipping header row
+    
+    for row in rows:
+        comorbidity_data = {}
+        
+        # Find the year (first column)
+        year = row.find_all("td")[0].get_text(strip=True)
+        if year:
+            comorbidity_data["year"] = year
+        
+        # Find the V24 value (second column)
+        v24_value = row.find_all("td")[1].get_text(strip=True)
+        if v24_value:
+            comorbidity_data["V24"] = v24_value
+        
+        # Find the V28 value (third column)
+        v28_value = row.find_all("td")[2].get_text(strip=True)
+        if v28_value:
+            comorbidity_data["V28"] = v28_value
+        
+        # Add the extracted data to the list
+        if comorbidity_data:
+            v24_v28_data.append(comorbidity_data)
+
+    
+    # Extract the paragraph for Reported Comorbidities
+    reported_paragraph = comorbidities_table.find_next("p")
+    reported_paragraph_text = reported_paragraph.get_text(strip=True) if reported_paragraph else ""
+    
+    # Find the table with the reported comorbidities
+    reported_comorbidities_table = reported_paragraph.find_next("table")
+    
+    # List to store reported comorbidities data
+    reported_comorbidities_data = []
+    
+    # Extract the rows of the table (skipping the header row)
+    reported_rows = reported_comorbidities_table.find_all("tr")[1:]  # Skipping header row
+    
+    for row in reported_rows:
+        comorbidity_data = {}
+        
+        # Check if there are enough columns in the row
+        columns = row.find_all("td")
+        
+        if len(columns) >= 5:
+            # Extract HCC V24 value (first column)
+            hcc_v24 = columns[0].get_text(strip=True)
+            if hcc_v24:
+                comorbidity_data["HCC V24"] = hcc_v24
+            
+            # Extract HCC V28 value (second column)
+            hcc_v28 = columns[1].get_text(strip=True)
+            if hcc_v28:
+                comorbidity_data["HCC V28"] = hcc_v28
+            
+            # Extract ICD-10 Code (third column)
+            icd_code = columns[2].get_text(strip=True)
+            if icd_code:
+                comorbidity_data["ICD-10 Code"] = icd_code
+            
+            # Extract Possible Comorbidity (fourth column)
+            possible_comorbidity = columns[3].get_text(strip=True)
+            if possible_comorbidity:
+                comorbidity_data["Possible Comorbidity"] = possible_comorbidity
+            
+            # Extract Explanation (fifth column)
+            explanation = columns[4].get_text(strip=True)
+            if explanation:
+                comorbidity_data["Explanation"] = explanation
+        
+            # Add the extracted data to the list
+            if comorbidity_data:
+                reported_comorbidities_data.append(comorbidity_data)
+
+    
+    # Extract the next paragraph after the reported comorbidities table
+    inferred_paragraph = reported_comorbidities_table.find_next("p")
+    inferred_paragraph_text = inferred_paragraph.get_text(strip=True) if inferred_paragraph else ""
+    
+    # Find the table with the inferred comorbidities
+    inferred_comorbidities_table = inferred_paragraph.find_next("table")
+    
+    # List to store inferred comorbidities data
+    inferred_comorbidities_data = []
+    
+    # Extract the rows of the table (skipping the header row)
+    inferred_rows = inferred_comorbidities_table.find_all("tr")[1:]  # Skipping header row
+    
+    for row in inferred_rows:
+        comorbidity_data = {}
+        
+        # Check if there are enough columns in the row
+        columns = row.find_all("td")
+        
+        if len(columns) >= 5:
+            # Extract HCC V24 value (first column)
+            hcc_v24 = columns[0].get_text(strip=True)
+            if hcc_v24:
+                comorbidity_data["HCC V24"] = hcc_v24
+            
+            # Extract HCC V28 value (second column)
+            hcc_v28 = columns[1].get_text(strip=True)
+            if hcc_v28:
+                comorbidity_data["HCC V28"] = hcc_v28
+            
+            # Extract ICD-10 Code (third column)
+            icd_code = columns[2].get_text(strip=True)
+            if icd_code:
+                comorbidity_data["ICD-10 Code"] = icd_code
+            
+            # Extract Possible Comorbidity (fourth column)
+            possible_comorbidity = columns[3].get_text(strip=True)
+            if possible_comorbidity:
+                comorbidity_data["Possible Comorbidity"] = possible_comorbidity
+            
+            # Extract Explanation (fifth column)
+            explanation = columns[4].get_text(strip=True)
+            if explanation:
+                comorbidity_data["Explanation"] = explanation
+        
+            # Add the extracted data to the list
+            if comorbidity_data:
+                inferred_comorbidities_data.append(comorbidity_data)
+
+    
+    return {
+        "title": "Reported and Inferred Comorbidities",
+        "v28_implementation_plan": {
+            "paragraph": paragraph_text,
+            "v24_v28_data": v24_v28_data
+        },
+        "reported_comorbidities": {
+            "paragraph": reported_paragraph_text,
+            "reported_comorbidities_data": reported_comorbidities_data
+        },
+        "inferred_comorbidities": {
+            "paragraph": inferred_paragraph_text,
+            "inferred_comorbidities_data": inferred_comorbidities_data
+        }
+    }
+
+def extract_acb_data(soup: BeautifulSoup) -> dict:
+    # Find the "Anticholinergic Cognitive Burden (ACB)" header
+    acb_section = soup.find("h3", id="AhdACB")
+    
+    if not acb_section:
+        return {}  # Return empty dictionary if no ACB section found
+    
+    # Find the table that follows the header
+    acb_table = acb_section.find_next("table")
+    
+    acb_data = {}
+    
+    # Extract the rows of the table
+    rows = acb_table.find_all("tr")[1:]  # Skip the header row
+    
+    for row in rows:
+        cells = row.find_all("td")
+        
+        if len(cells) >= 4:
+            medication_name = cells[0].get_text(strip=True)
+            dosage = cells[1].get_text(strip=True)
+            acb_score = cells[2].get_text(strip=True)
+            alternatives = cells[3].get_text(strip=True)
+            
+            # Store all the data in the dictionary
+            acb_data[medication_name] = {
+                "dosage": dosage,
+                "acb_score": int(acb_score) if acb_score.isdigit() else None,
+                "alternatives": alternatives
+            }
+    
+    return acb_data  # Return a dictionary mapping medication name to its details
+
+
+def extract_medications_fall_risk(soup: BeautifulSoup) -> dict:
+    fall_risk_section = soup.find("h4", id="ShdMrtdFallRisk")
+    fall_risk_data = {}
+
+    if fall_risk_section:
+        fall_risk_table = fall_risk_section.find_next("table")
+        for row in fall_risk_table.find_all("tr")[1:]:  # Skip the header row
+            cells = row.find_all("td")
+            if len(cells) >= 3:
+                medication_name = cells[0].get_text(strip=True)
+                fall_risk_score = cells[2].get_text(strip=True)
+                fall_risk_data[medication_name] = int(fall_risk_score)
+
+    return fall_risk_data
+
+def extract_medications(soup: BeautifulSoup) -> dict:
+    # Find the "Current Medications" header
+    current_meds_section = soup.find("h3", id="ShdMrtdCurrentMedsAndDdis")
+    
+    if not current_meds_section:
+        return {"title": "Current Medications", "medications": []}
+    
+    # Find the table that follows the header
+    meds_table = current_meds_section.find_next("table")
+    
+    # List to store all medications
+    medications = []
+    
+    # Extract the rows of the table
+    rows = meds_table.find_all("tr", class_=["odd", "even"])
+    
+    # Iterate over the rows to extract medication data
+    for row in rows:
+        medication_data = {}
+        cells = row.find_all("td")
+        
+        if len(cells) >= 4:
+            medication_data["medication"] = cells[0].get_text(strip=True)
+            medication_data["dosage"] = cells[1].get_text(strip=True)
+            medication_data["class_indication"] = cells[2].get_text(strip=True)
+            medication_data["date_started"] = cells[3].get_text(strip=True)
+        
+        medications.append(medication_data)
+    
+    fall_risk_data = extract_medications_fall_risk(soup)
+    acb_medications = extract_acb_data(soup)
+    
+    # Add the risks data (fall_risk_score and acb_score) to each medication
+    for med in medications:
+        med_name = med["medication"]
+        
+        # Add fall risk score if available (using substring match)
+        for fall_med_name, fall_score in fall_risk_data.items():
+            if fall_med_name.lower() in med_name.lower():  # Perform case-insensitive substring match
+                if "risks" not in med:
+                    med["risks"] = {}
+                med["risks"]["fall_risk_score"] = fall_score
+                break  # Once a match is found, no need to check further
+        
+        # Add ACB score if available (handle partial match for medication names)
+        for acb_med_name, acb_data in acb_medications.items():
+            if acb_med_name.lower() in med_name.lower():  # Perform case-insensitive substring match
+                if "risks" not in med:
+                    med["risks"] = {}
+                med["risks"]["acb_score"] = acb_data["acb_score"]
+                break  # Once a match is found, no need to check further
+    
+    
+    return {
+        "currentMedicationstitle": current_meds_section.get_text(strip=True),
+        "medications": medications
+    }
+
 OUTPUT_DIR     = "output"
 HTML_FILE      = "Physician_Summary_1-00_JANEADOE_2024-11-02.html"
 REPORT_JSON    = os.path.join(OUTPUT_DIR, "report_physician.json")
@@ -593,6 +1063,11 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
         "leqembi": extract_leqembi(soup),
         "fall_risk": extract_fall_risk(soup),
         "additional_diagnostics": extract_additional_diagnostics(soup),
+        "cognitiveFactors": extract_cognitive_factors(soup),
+        "medicalIssues": extract_medical_issues(soup),
+        "comorbidities": extract_comorbidities(soup),
+        "reportedAndInferredComorbidities": extract_reported_and_inferred_comorbidities(soup),
+        "currentMedications": extract_medications(soup),
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
