@@ -1047,6 +1047,79 @@ def extract_medications(soup: BeautifulSoup) -> dict:
         "currentMedicationstitle": current_meds_section.get_text(strip=True),
         "medications": medications
     }
+    
+def extract_immune_score(soup: BeautifulSoup) -> dict:
+    # Locate the "Immune Score" header
+    immune_section = soup.select_one("#ImmuneScale")
+    
+    # If the section is not found, return an empty structure
+    if not immune_section:
+        return {"title": "Immune Score", "score": None, "interpretation": ""}
+    
+    # Find the paragraph that follows the header
+    heading_div = immune_section.select_one("#AhdImmuneScale")
+    heading = heading_div.get_text(strip=True) if heading_div else ""
+    preface_section = immune_section.select_one("#ScoreExplanation")
+    rows = preface_section.find_all("td")
+    preface = rows[0].get_text(strip=True) if len(rows) > 0 else ""
+    total_score = rows[1].get_text(strip=True) if len(rows) > 1 else None
+    
+    disclaimer = immune_section.select_one("#Disclaimer1")
+    disclaimer_text = disclaimer.get_text(strip=True) if disclaimer else ""
+    high_values = []
+    entries = []
+    
+    table = disclaimer.find_next("table") if disclaimer else None
+    headers = [th.get_text(strip=True) for th in table.find_all("th")] if table else []
+    
+    for tr in table.find_all("tr", recursive=False)[2:] if table else []:
+        tables = tr.find_all("table")
+        factors = [td.decode_contents() for td in tables[0].find_all("td")] if tables else []
+        scores = [td.get_text(strip=True) for td in tables[1].find_all("td")] if len(tables) > 1 else []
+        targets = [td.get_text(strip=True) for td in tables[2].find_all("td")] if len(tables) > 2 else []
+        for factor, score, target in zip(factors, scores, targets):
+            # Split score by comma if it contains one
+            value = ""
+            severity = ""
+            if ',' in score:
+                parts = score.split(',', 1)
+                value = parts[0].strip() if len(parts) > 0 else ""
+                severity = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                value = score.strip()
+                severity = ""
+
+            if severity.lower() == "very high" or severity.lower() == "very low":
+                high_values.append({
+                    "factor": factor,
+                    "severity": severity,
+                    "score": value,
+                    "target": target
+                })
+            entries.append({
+                "factor": factor,
+                "severity": severity,
+                "score": value,
+                "target": target
+            })
+            
+    postface = []
+    postface_div = table.find_next("div") if table else None
+    for sibling in postface_div.next_siblings:
+        if sibling.name == "small":
+            postface.append(sibling.decode_contents())
+    # postface = [small.get_text(strip=True) for small in postface_div_1.next_siblings("small", recursive=False)] if postface_div_1 else []
+
+    return {
+        "title": heading,
+        "preface": preface,
+        "score": total_score,
+        "headers": headers,
+        "factors": entries,
+        "highValues": high_values,
+        "postface": postface,
+        "disclaimer": disclaimer_text,
+    }
 
 OUTPUT_DIR     = "output"
 HTML_FILE      = "Physician_Summary_1-00_JANEADOE_2024-11-02.html"
@@ -1073,6 +1146,7 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
         "comorbidities": extract_comorbidities(soup),
         "reportedAndInferredComorbidities": extract_reported_and_inferred_comorbidities(soup),
         "currentMedications": extract_medications(soup),
+        "immuneScore": extract_immune_score(soup),
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
