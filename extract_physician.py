@@ -1110,6 +1110,54 @@ def extract_immune_score(soup: BeautifulSoup) -> dict:
             postface.append(sibling.decode_contents())
     # postface = [small.get_text(strip=True) for small in postface_div_1.next_siblings("small", recursive=False)] if postface_div_1 else []
 
+    immunoactive_table = table.find_next_sibling("table") if table else None
+    if immunoactive_table:
+        immunoactive_headers = [th.decode_contents() for th in immunoactive_table.find_all("th")]
+        immunoactive_data = []
+        for tr in immunoactive_table.find_all("tr")[1:]:
+            td = tr.find_next("td", recursive=False)
+            name = tr.find_next("small", recursive=False).get_text(strip=True).split(":", 1)[0] if td else ""
+            inner_table = td.find("table") if td else None
+            conditions = None
+            if inner_table:
+                tds = inner_table.find_all("td")
+                conditions = [td.get_text(strip=True).strip("\u2022 ") for td in tds if td.get_text(strip=True)] if tds else []
+
+            if name:
+                immunoactive_data.append({
+                    "name": name,
+                    "conditions": conditions
+                })
+            
+        immunoactive_meds = {
+            "headers": immunoactive_headers,
+            "data": immunoactive_data
+        }
+        
+    immunoactive_conditions_table = immunoactive_table.find_next_sibling("table") if immunoactive_table else None
+    if immunoactive_conditions_table:
+        immunoactive_conditions_headers = [th.decode_contents() for th in immunoactive_conditions_table.find_all("th")]
+        immunoactive_conditions_data = []
+        for tr in immunoactive_conditions_table.find_all("tr")[1:]:
+            td = tr.find_next("td", recursive=False)
+            name = tr.find_next("small", recursive=False).get_text(strip=True).split(":", 1)[0] if td else ""
+            inner_table = td.find("table") if td else None
+            conditions = None
+            if inner_table:
+                tds = inner_table.find_all("td")
+                conditions = [td.get_text(strip=True).strip("\u2022 ") for td in tds if td.get_text(strip=True)] if tds else []
+
+            if name:
+                immunoactive_conditions_data.append({
+                    "name": name,
+                    "conditions": conditions
+                })
+            
+        immunoactive_conditions = {
+            "headers": immunoactive_conditions_headers,
+            "data": immunoactive_conditions_data
+        }
+
     return {
         "title": heading,
         "preface": preface,
@@ -1119,6 +1167,8 @@ def extract_immune_score(soup: BeautifulSoup) -> dict:
         "highValues": high_values,
         "postface": postface,
         "disclaimer": disclaimer_text,
+        "immunoactive_meds": immunoactive_meds,
+        "immunoactive_conditions": immunoactive_conditions
     }
 
 OUTPUT_DIR     = "output"
