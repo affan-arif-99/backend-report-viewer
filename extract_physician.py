@@ -1170,6 +1170,58 @@ def extract_immune_score(soup: BeautifulSoup) -> dict:
         "immunoactive_meds": immunoactive_meds,
         "immunoactive_conditions": immunoactive_conditions
     }
+    
+def extract_lifestyle(soup: BeautifulSoup) -> dict:
+    # Find the "Lifestyle Recommendations" header
+    lifestyle_section = soup.find("h3", id="ShdMrtdFoundation")
+    
+    if not lifestyle_section:
+        return {"title": "Lifestyle Recommendations", "preface": "", "headers": [], "recommendations": []}
+    
+    # Extract heading
+    heading = lifestyle_section.get_text(strip=True)
+    
+    # Extract preface text from the div following the header
+    preface_div = lifestyle_section.find_next("div")
+    preface_text = ""
+    if preface_div:
+        preface_paragraphs = preface_div.find_all("p")
+        preface_text = " ".join([p.get_text(strip=True) for p in preface_paragraphs])
+    
+    # Find the table
+    lifestyle_table = lifestyle_section.find_next("table")
+    
+    headers = []
+    recommendations = []
+    
+    if lifestyle_table:
+        # Extract headers
+        header_row = lifestyle_table.find("tr")
+        if header_row:
+            headers = [th.get_text(strip=True) for th in header_row.find_all("th")]
+        
+        # Extract table rows (skip header row)
+        rows = lifestyle_table.find_all("tr")[1:]
+        for row in rows:
+            cells = row.find_all("td")
+            if len(cells) >= 3:
+                topic = cells[0].get_text(strip=True)
+                details = cells[1].get_text(strip=True)
+                comments = cells[2].get_text(strip=True)
+                
+                recommendations.append({
+                    "topic": topic,
+                    "details": details,
+                    "comments": comments
+                })
+    
+    return {
+        "title": heading,
+        "preface": preface_text,
+        "headers": headers,
+        "recommendations": recommendations
+    }
+    
 
 OUTPUT_DIR     = "output"
 HTML_FILE      = "Physician_Summary_1-00_JANEADOE_2024-11-02.html"
@@ -1197,6 +1249,7 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
         "reportedAndInferredComorbidities": extract_reported_and_inferred_comorbidities(soup),
         "currentMedications": extract_medications(soup),
         "immuneScore": extract_immune_score(soup),
+        "lifestyleRecommendation": extract_lifestyle(soup)
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
