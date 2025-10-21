@@ -86,8 +86,6 @@ def extract_preface(soup):
     }
 
 def extract_health_report(soup):
-    header = extract_header(soup)
-
     # Overview table under “YourStatus”
     status_tbl = soup.select_one("#YourStatus table")
     ths = [th.get_text(strip=True) for th in status_tbl.find_all("th")]
@@ -161,7 +159,6 @@ def extract_health_report(soup):
                 i += 1
 
     return {
-        "header": header,
         "title": "Current Status",
         "currentStatus": { "overview": overview },
         "healthStatusSections": sections
@@ -263,7 +260,7 @@ def extract_action_plan(soup):
 
     supplements_title_tag = soup.find("h3", id="ShdMrpMedsSupplements")
     ap["supplements"] = {}
-    ap["supplements"]["title"] = supplements_title_tag.get_text(" ", strip=True) if supplements_title_tag else "Supplements"
+    ap["supplements"]["heading"] = supplements_title_tag.get_text(" ", strip=True) if supplements_title_tag else "Supplements"
     
     ap["supplements"]["intro"] = []
     supplements_intro = supplements_title_tag.find_next("div").find("p")
@@ -342,7 +339,7 @@ def extract_current_medication(soup):
     current_medication = {}
     medications = soup.find("div", id="Medications")
     current_medication_title = medications.find("h3", id="ShdMrtMedsCurrent")
-    current_medication["title"] = current_medication_title.get_text(" ", strip=True) if current_medication_title else "Current Medication"
+    current_medication["heading"] = current_medication_title.get_text(" ", strip=True) if current_medication_title else "Current Medication"
     
     current_medication_intro = current_medication_title.find_next("p")
     current_medication["intro"] = current_medication_intro.get_text(" ", strip=True) if current_medication_intro else ""
@@ -374,7 +371,7 @@ def extract_current_medication(soup):
 def extract_lifestyle(soup):
     lifestyle = {}
     lifestyle_title_tag = soup.find("h2", id="ShdMrpLifestyle")
-    lifestyle["title"] = lifestyle_title_tag.get_text(" ", strip=True)
+    lifestyle["heading"] = lifestyle_title_tag.get_text(" ", strip=True)
 
     lifestyle_intro = lifestyle_title_tag.find_next("div").find("p")
     lifestyle_intro = lifestyle_intro.get_text(" ", strip=True) if lifestyle_intro else ""
@@ -412,7 +409,7 @@ def extract_nutrition(soup):
     nutrition = {}
     nutrition["recommendations"] = {}
     nutrition_header = soup.find("h2", id="ShdMrpNewDiet")
-    nutrition["recommendations"]["header"] = nutrition_header.get_text(" ", strip=True)
+    nutrition["recommendations"]["heading"] = nutrition_header.get_text(" ", strip=True)
     
     nutrition_header_intro = nutrition_header.find_next("p")
     nutrition["recommendations"]["header_intro"] = nutrition_header_intro.get_text(" ", strip=True) if nutrition_header_intro else ""
@@ -619,8 +616,14 @@ def extract_cognitive_function(soup):
                 r'(.+?)\s+'                                      # group 2: measurement label
                 r'(\d+(?:\.\d+)?(?:\s*\S+)*?)\s*$'               # group 3: number + optional units
             )
+            
             severity, measurement, value = "", "", ""
-            m = pattern.match(function)
+            m = None
+            if(function):
+                m = pattern.match(function)
+            else:
+                m = pattern.match(immediate_text + "\n" + small_text)
+            
             if m:
                 # print("Function:", m)
                 severity, measurement, value = m.groups()
@@ -631,6 +634,7 @@ def extract_cognitive_function(soup):
                 img = img_tag["src"]
 
             factor["entries"].append({
+                "functionText": function,
                 "description": immediate_text + "\n" + small_text,
                 "severity": severity.strip() if severity else "",
                 "measurement": measurement.strip() if measurement else "",
@@ -640,8 +644,48 @@ def extract_cognitive_function(soup):
                 "image": img
             })
 
+        # Merge consecutive entries without severity, measurement, and currentLevel
+        merged_entries = []
+        current_description = []
+
+        for entry in factor["entries"]:
+            if not entry["functionText"]:
+                # Accumulate descriptions for entries without key data
+                if current_description:
+                    current_description.append(entry["description"])
+                else:
+                    current_description = [entry["description"]]
+            else:
+                # If we have accumulated descriptions, create a merged entry
+                if current_description:
+                    merged_entries.append({
+                        "description": current_description,
+                        "severity": "",
+                        "measurement": "",
+                        "currentLevel": "",
+                        "targetLevel": "",
+                        "image": None
+                    })
+                    current_description = ""
+                
+                # Add the current entry with data
+                merged_entries.append(entry)
+
+        # Handle any remaining accumulated description
+        if current_description:
+            merged_entries.append({
+                "description": current_description,
+                "severity": "",
+                "measurement": "",
+                "currentLevel": "",
+                "targetLevel": "",
+                "image": None
+            })
+
+        factor["entries"] = merged_entries
         factors.append(factor)
 
+    
     return {
         "title": title,
         "intro": intro,
@@ -878,12 +922,17 @@ def extract_allergies(soup):
                 rows.append(row)
 
     return {
-        "title": title,
+        "heading": title,
         "description": description,
         "headers": headers,
         "rows": rows
     }
 
+def extract_known_medical_conditions():
+    return {
+        "title": "Known Medical Conditions",
+    }
+    
 def extract_reported_problems(soup):
     """
     Extracts the Current Comorbidities section as:
@@ -930,7 +979,7 @@ def extract_reported_problems(soup):
                 rows.append(row)
 
     return {
-        "title": title,
+        "heading": title,
         "description": description,
         "headers": headers,
         "rows": rows
@@ -1321,9 +1370,412 @@ def extract_footnotes(soup):
                 footnotes.append(text)
 
     return {
-        "heading": heading,
+        "title": heading,
         "footnotes": footnotes
     }
+    
+def extract_medication_planner(soup):
+    data = {
+        "title": "Your Medication Planner",
+        "medications": [
+            {
+                "date": "2024-07-09",
+                "medicines": {
+                    "morning": ["Methylcobalamins", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri...", "Metformin", "Duloxetine (Cymbalta)"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "ooga", "Lecanemab", "Fish Oil (Omega-3)", "CoQ10 (Ubiquinol)", "Magnesium (Citrate)", "Zinc (Picolinate)", "Curcumin (Meriva)", "NAC (N-Acetyl Cysteine)", "Probiotic", "Vitamin B Complex", "Vitamin C (Ascorbic Acid)"],
+                    "evening": [
+                    "Alpha-lipoic acid (ALA)",
+                    "Berberine",
+                    "Magnesium glycinate",
+                    "Coenzyme Q10 (CoQ10)",
+                    "Melatonin",
+                    "Ashwagandha",
+                    "Valerian root",
+                    "Omega-3 fatty acids (Fish Oil)",
+                    "Vitamin D3",
+                    "Vitamin B12",
+                    "Calcium citrate",
+                    "Zinc picolinate",
+                    "Turmeric (Curcumin)",
+                    "GABA",
+                    "L-Theanine",
+                    "5-HTP",
+                    "N-Acetylcysteine (NAC)",
+                    "Resveratrol",
+                    "Milk thistle",
+                    "Chromium picolinate",
+                    "Probiotic blend",
+                    "Evening primrose oil"
+                    ]
+                }
+            },
+            {
+                "date": "2024-07-10",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri...", "Duloxetine (Cymbalta)"],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-11",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-07-12",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-13",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-07-14",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)", "Fluocinonide Acetonide Otic..."]
+                }
+            },
+            {
+                "date": "2024-07-15",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-07-16",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-07-17",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-07-18",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-19",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine", "Fluocinonide Acetonide Otic..."]
+                }
+            },
+            {
+                "date": "2024-07-20",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-21",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-07-22",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-23",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-07-24",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)", "Fluocinonide Acetonide Otic..."]
+                }
+            },
+            {
+                "date": "2024-07-25",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-07-26",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-27",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-07-28",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)", "Fluocinonide Acetonide Otic..."]
+                }
+            },
+            {
+                "date": "2024-07-29",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-07-30",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-07-31",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-08-01",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)", "Fluocinonide Acetonide Otic..."]
+                }
+            },
+            {
+                "date": "2024-08-02",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-08-03",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            },
+            {
+                "date": "2024-08-04",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)"],
+                    "evening": ["Berberine"]
+                }
+            },
+            {
+                "date": "2024-08-05",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": [],
+                    "evening": ["Alpha-lipoic acid (ALA)", "Fluocinonide Acetonide Otic..."]
+                }
+            },
+            {
+                "date": "2024-08-06",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol"],
+                    "afternoon": ["Vitamin D3/K2 (cholecalciferol...)", "Lecanemab"],
+                    "evening": ["Berberine", "Fluticasone (Florase) Inhalant"]
+                }
+            },
+            {
+                "date": "2024-08-07",
+                "medicines": {
+                    "morning": ["Methylcobalamin", "Levothyroxine", "Resveratrol", "Chlorpheniramine / Chlor-Tri..."],
+                    "afternoon": ["Duloxetine (Cymbalta)"],
+                    "evening": ["Alpha-lipoic acid (ALA)"]
+                }
+            }
+        ]
+    }
+    
+    return data
+
+def extract_activity_planner(soup):
+    data = {
+        "title": "Your Activity Planner",
+        "slots": [
+            {
+                "time": "08:00 AM",
+                "title": "Physiotherapy Exercise",
+                "frequency": "Daily",
+            },
+            {
+                "time": "09:30 AM",
+                "category": "Exercise",
+                "categoryColor": "infoEmphasis",
+                "frequency": "Daily",
+                "description": "Any one activity from Exercise",
+            },
+            {
+                "time": "12:30 PM",
+                "category": "Mental",
+                "categoryColor": "successEmphasis",
+                "frequency": "Alternating Days",
+                "description": "Any one activity from Mental",
+            },
+            {
+                "time": "05:00 PM",
+                "category": "Relaxation",
+                "categoryColor": "warning",
+                "frequency": "Daily",
+                "description": "Any five activities from Relaxation",
+            },
+            {
+                "time": "07:00 PM",
+                "category": "Group B",
+                "categoryColor": "blueEmphasis",
+                "frequency": "Fridays",
+                "description": "Any one activity from Group B",
+            },
+            {
+                "time": "09:30 PM",
+                "title": "Physiotherapy Exercise",
+                "frequency": "Daily",
+            },
+        ],
+        "groups": [
+            {
+                "tags": [{ "name": "Exercise", "color": "infoEmphasis" }],
+                "activities": [
+                    {
+                        "name": "Side to side Reach",
+                        "duration": "5 min",
+                        "description": "Reach one arm to the side, then to the other.",
+                    },
+                    {
+                        "name": "Neck stretches",
+                        "duration": "5 min",
+                        "description": "Side-to-side, forward/backward",
+                    },
+                    {
+                        "name": "Shoulder rolls & stretches",
+                        "duration": "5 min",
+                        "description": "Loosen upper back and shoulders",
+                    },
+                ]
+            },
+            {
+                "tags": [{ "name": "Relaxation", "color": "warning" }],
+                "activities": [
+                    {
+                        "name": "Music",
+                        "duration": "30 min",
+                        "description": "Listen to calming music to unwind.",
+                    },
+                    {
+                        "name": "Yoga",
+                        "duration": "15 min",
+                        "description": "1. Engage in a calming yoga session focusing on deep breathing and gentle stretches.\r\n2. Hold each pose for at least 30 seconds, allowing your body to relax and release tension.",
+                    },
+                    {
+                        "name": "Shoulder rolls & stretches",
+                        "duration": "1 min",
+                        "description": "Loosen upper back and shoulders",
+                    },
+                ]
+            },
+            {
+                "tags": [{ "name": "Sleep", "color": "blueEmphasis" }],
+                "activities": [
+                    {
+                        "name": "Wind down routine",
+                        "duration": "30 min",
+                        "description": "Engage in relaxing activities such as reading or listening to soothing music before bedtime.",
+                    },
+                    {
+                        "name": "Limit screen time",
+                        "duration": "N/A",
+                        "description": "Avoid screens at least 1 hour before bed to improve sleep quality.",
+                    },
+                ]
+                
+            },
+            {
+                "tags": [
+                    { "name": "Mental", "color": "successEmphasis" },
+                    { "name": "2 People", "color": "dark" },
+                ],
+                "activities": [
+                    {
+                        "name": "Mindfulness meditation",
+                        "duration": "10 min",
+                        "description": "Practice mindfulness meditation to enhance mental clarity and emotional resilience.",
+                    },
+                    {
+                        "name": "Journaling",
+                        "duration": "15 min",
+                        "description": "Reflect on your thoughts and feelings by journaling.",
+                    },
+                ]
+            },
+        ]
+    }
+    
+    return data
+
+def extract_goal_tracker(soup):
+    data = {
+        "title": "Your Goal Tracker",
+        "goals": []
+    }
+    
+    return data
 
 # def extract_lifestyle(soup: BeautifulSoup) -> dict | None:
 #     """
@@ -1463,19 +1915,25 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
     # Let BeautifulSoup handle the decoding
     soup = BeautifulSoup(raw, 'html.parser')
 
+    action_plan = extract_action_plan(soup)
     report = {
         "header": extract_header(soup),
         "preface": extract_preface(soup),
         "healthReport": extract_health_report(soup),
-        "actionPlan": extract_action_plan(soup),
+        "actionPlan": action_plan,
+        "currentMedication": extract_current_medication(soup),
+        "supplementPlan": action_plan["supplements"],
         "lifestyle": extract_lifestyle(soup),
         "nutrition": extract_nutrition(soup),
-        "currentMedication": extract_current_medication(soup),
-        "cognitiveFunction": extract_cognitive_function(soup),
-        "allergies": extract_allergies(soup),
-        "reportedProblems": extract_reported_problems(soup),
         "dietaryRecommendations": extract_dietary_recommendations(soup),
-        "footnotes": extract_footnotes(soup)
+        "cognitiveFunction": extract_cognitive_function(soup),
+        "knownMedicalConditions": extract_known_medical_conditions(),
+        "reportedProblems": extract_reported_problems(soup),
+        "allergies": extract_allergies(soup),
+        "footnotes": extract_footnotes(soup),
+        "goalTracker": extract_goal_tracker(soup),
+        "medicationPlanner": extract_medication_planner(soup),
+        "activityPlanner": extract_activity_planner(soup),
         # "supplements":  extract_supplements(soup),
         # "lifestyle": extract_lifestyle(soup)
     }
