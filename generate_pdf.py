@@ -37,9 +37,9 @@ def main(input_path: str, output_filename: str, footer_tmpl: str):
         # 5. Export with zero margins
         page.pdf(
             path=output_filename,
-            format="A4",
+            format="A3",
             print_background=True,
-            margin={"top":"0mm","bottom":"1mm","left":"0mm","right":"0mm"},
+            margin={"top":"0mm","bottom":"0mm","left":"0mm","right":"0mm"},
             prefer_css_page_size=True,
             display_header_footer=True,
             footer_template=footer_tmpl

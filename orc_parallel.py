@@ -43,12 +43,10 @@ FOOTER_TMPL = """
     ">
     <div style="line-height: 1.2;">
         <div>uMETHOD Health, Inc.</div>
-        <div>9650 Falls of Neuse Road, Suite 138‑146</div>
-        <div>Raleigh, NC 27615</div>
-        <div style="color: #3B82F6;">support@umethod.com</div>
+        <a href="mailto:support@umethod.com">support@umethod.com</a>
     </div>
     <div style="text-align: right; line-height: 1.2;">
-        <div>Copyright © 2013‑2025 uMETHOD Health, Inc.</div>
+        <div>Copyright © 2013–2025 uMETHOD Health, Inc.</div>
         <div>All Rights Reserved. Confidential.</div>
     </div>
     </div>
