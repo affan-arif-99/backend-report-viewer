@@ -13,14 +13,23 @@ NBSP = "\xa0"
 BULLET_CHARS = ("•", "\u2022")
 
 def extract_header(soup):
+    root = soup.find("div", id="topmatter")
     hdr = {}
     # Participant info
-    part_tbl = soup.find(id="Participant").find("table")
+    report_for = root.find("p", class_="newTitleUppercase")
+    if report_for:
+        hdr["reportFor"]  = report_for.get_text(strip=True).replace("for ", "").strip()
+
+    cover_text = root.find("div", id="Disclaimer2")
+    if cover_text:
+        hdr["coverText"] = cover_text.get_text(" ", strip=True)
+    
+    part_tbl = root.find(id="Participant").find("table")
     rows = part_tbl.find_all("tr")
     hdr["name"]      = rows[0].find_all("td")[1].get_text(strip=True)
     hdr["createdOn"] = rows[1].find_all("td")[1].get_text(strip=True)
     # Practice info
-    prac_tbl = soup.find(id="Practice").find("table")
+    prac_tbl = root.find(id="Practice").find("table")
     prow = prac_tbl.find_all("tr")
     hdr["doctor"] = prow[0].find_all("td")[1].get_text(strip=True)
     hdr["clinic"] = prow[1].find_all("td")[1].get_text(strip=True)
@@ -29,8 +38,6 @@ def extract_header(soup):
     return hdr
 
 def extract_preface(soup):
-    header = extract_header(soup)
-
     # Purpose of This Report
     purpose_ps = []
     for p in soup.select("#Purpose p"):
@@ -68,7 +75,6 @@ def extract_preface(soup):
 
 
     return {
-        "header": header,
         "title": "Preface",
         "purposeParagraphs": purpose_ps,
         "statisticCallout": statistic,
@@ -1036,10 +1042,244 @@ def extract_dietary_recommendations(soup):
                 title = text
                 description = ""
         results.append({"title": title, "description": description})
+        
+    models_map = {}
+    preface = []
+    for item in results:
+        if item["title"].lower() in ["start with the eating guidelines in the mind study.", "apoe-e4"]:
+            preface.append(item["description"])
+            
+        if item["title"].lower() in ["good fats", "bad fats"]:
+            if not models_map.get("fats"):
+                models_map["fats"] = []
+                
+            if(item["title"].lower() == "good fats"):
+                header = {}
+                header["key"] = item["title"].lower()
+                header["span"] = "full"
+                header["type"] = "header"
+                header["heading"] = "Choose Healthy Fats Every Day"
+                header["preface"] = item["description"]
+                models_map["fats"].append(header)
+                
+            if(item["table"]):
+                table = {}
+                table["type"] = "list-section"
+                if item["inclusionType"] == "include":
+                    table["span"] = "left"
+                    table["inclusionType"] = "include"
+                    table["heading"] = "Good Fats to Include"
+                    table["items"] = item["table"]
+                else:
+                    table["inclusionType"] = "avoid"
+                    table["span"] = "right"
+                    table["heading"] = "Fats to Limit or Avoid"
+                    table["items"] = item["table"]
+                models_map["fats"].append(table)
+            
+        
+        if item["title"].lower() in ["soluble fiber"]:
+            if not models_map.get("fiber"):
+                models_map["fiber"] = []
+                
+            if(item["title"].lower() == "soluble fiber"):
+                header = {}
+                header["type"] = "header"
+                header["span"] = "full"
+                header["key"] = item["title"].lower()
+                header["heading"] = "Fiber-Rich Foods to Support Brain Function"
+                models_map["fiber"].append(header)
+                
+                list = {}
+                list["span"] = "full"
+                list["type"] = "list"
+                list["items"] = item["description"]
+                models_map["fiber"].append(list)
+
+        if item["title"].lower() in ["foods with low-glycemic load"]:
+            if not models_map.get("carbs"):
+                models_map["carbs"] = []
+                
+            if(item["title"].lower() == "foods with low-glycemic load"):
+                header = {}
+                header["type"] = "header"
+                header["span"] = "full"
+                header["key"] = item["title"].lower()
+                header["heading"] = "Watch Your Blood Sugar"
+                header["subHeading"] = "Low-Glycemic Foods Only"
+                header["preface"] = "Foods with low-glycemic load have the positive effect of reducing the spike of rapidly-changing insulin levels. So, focus on avoiding food with high glycemic load."
+                models_map["carbs"].append(header)
+                
+                food_dict = {}
+                with open('food_dict.json', 'r') as f:
+                    food_dict = json.load(f)
+
+                avoid_cues = ["avoid", "cut out", "eliminate", "stay away from", "reduce", "minimize"]
+                consume_cues = ["eat", "consume", "stick with", "focus on", "choose", "aim to", "prefer", "include"]
+
+                # --- Extract sentences ---
+                sentences = re.split(r'(?<=[.!?])\s+', item["description"].strip())
+
+                avoid_foods = []
+                consume_foods = []
+
+                for s in sentences:
+                    category = None
+                    # Find which cues exist in this sentence
+                    if any(cue in s.lower() for cue in avoid_cues):
+                        category = "avoid"
+                    elif any(cue in s.lower() for cue in consume_cues):
+                        category = "consume"
+                    else:
+                        continue
+
+                    # For each food term in dictionary, check if appears in sentence
+                    for group in food_dict.values():
+                        for f in group:
+                            if f.lower() in s.lower():
+                                if category == "avoid":
+                                    avoid_foods.append(f)
+                                else:
+                                    consume_foods.append(f)
+
+                # Remove duplicates and clean
+                avoid_foods = sorted(set(avoid_foods))
+                consume_foods = sorted(set(consume_foods))
+                
+                if consume_foods:
+                    consume_table = {}
+                    consume_table["span"] = "left"
+                    consume_table["type"] = "chips-section"
+                    consume_table["inclusionType"] = "include"
+                    consume_table["heading"] = "Instead, Take"
+                    consume_table["items"] = [food for food in consume_foods]
+                    models_map["carbs"].append(consume_table)
+                    avoid_cues = ["avoid", "cut out", "eliminate", "stay away from", "reduce"]
+                    consume_cues = ["eat", "consume", "stick with", "focus on", "choose", "aim to", "prefer", "include"]
+                    
+                if avoid_foods:
+                    avoid_table = {}
+                    avoid_table["span"] = "right"
+                    avoid_table["type"] = "chips-section"
+                    avoid_table["inclusionType"] = "avoid"
+                    avoid_table["heading"] = "Avoid Foods That Spike Blood Sugar"
+                    avoid_table["items"] = [food for food in avoid_foods]
+                    models_map["carbs"].append(avoid_table)
+
+
+                
+        if item["title"].lower() in ["vegetables and fruits"]:
+            if not models_map.get("fruits_veggies"):
+                models_map["fruits_veggies"] = []
+                
+            if(item["title"].lower() == "vegetables and fruits"):
+                header = {}
+                header["span"] = "full"
+                header["key"] = item["title"].lower()
+                header["type"] = "header"
+                header["heading"] = "Your Daily Fruit & Veggie Goals"
+                header["preface"] = "Focus on fresh or frozen (plain, without seasoning)."
+                models_map["fruits_veggies"].append(header)
+                
+                avoid_cues = ["avoid", "cut out", "eliminate", "stay away from", "reduce", "minimize"]
+                consume_cues = ["eat", "consume", "stick with", "focus on", "choose", "aim to", "prefer", "include"]
+
+                # --- Extract sentences ---
+                sentences = re.split(r'(?<=[.!?])\s+', item["description"].strip())
+
+                avoid_foods = []
+                consume_foods = []
+
+                for s in sentences:
+                    category = None
+                    # Find which cues exist in this sentence
+                    if any(cue in s.lower() for cue in avoid_cues):
+                        avoid_foods.append(s)
+                    elif any(cue in s.lower() for cue in consume_cues):
+                        consume_foods.append(s)
+                    else:
+                        continue
+
+                # Remove duplicates and clean
+                avoid_foods = sorted(set(avoid_foods))
+                consume_foods = sorted(set(consume_foods))
+                
+                if consume_foods:
+                    consume_table = {}
+                    consume_table["span"] = "left"
+                    consume_table["type"] = "list-section"
+                    consume_table["inclusionType"] = "include"
+                    consume_table["heading"] = "Your Aim"
+                    consume_table["items"] = consume_foods
+                    models_map["fruits_veggies"].append(consume_table)
+                
+                if avoid_foods:
+                    avoid_table = {}
+                    avoid_table["span"] = "right"
+                    avoid_table["type"] = "list-section"
+                    avoid_table["inclusionType"] = "avoid"
+                    avoid_table["heading"] = "Limit or Avoid"
+                    avoid_table["items"] = avoid_foods
+                    models_map["fruits_veggies"].append(avoid_table)
+
+            
+        if item["title"].lower() in ["lean protein", "prebiotics and probiotics"]:
+            if not models_map.get("proteins"):
+                models_map["proteins"] = []
+                
+            if(item["title"].lower() == "lean protein"):
+                header = {}
+                header["span"] = "left"
+                header["type"] = "header"
+                header["key"] = item["title"].lower()
+                header["heading"] = "Smart Protein Choices"
+                models_map["proteins"].append(header)
+                
+                list = {}
+                list["span"] = "left"
+                list["type"] = "list"
+                list["items"] = [line.strip() for line in item["description"].split(".")if line]
+                models_map["proteins"].append(list)
+                
+            if(item["title"].lower() == "prebiotics and probiotics"):
+                header = {}
+                header["span"] = "right"
+                header["type"] = "header"
+                header["key"] = item["title"].lower()
+                header["heading"] = "Probiotics & Gut Health"
+                models_map["proteins"].append(header)
+                
+                list = {}
+                list["span"] = "right"
+                list["type"] = "list"
+                list["items"] = [line.strip() for line in item["description"].split(".") if line]
+                models_map["proteins"].append(list)
+            
+        if(item["title"].lower() == "cyp1a2"):
+            if not models_map.get("antioxidants"):
+                models_map["antioxidants"] = []
+                
+            if(item["title"].lower() == "cyp1a2"):
+                header = {}
+                header["span"] = "full"
+                header["type"] = "header"
+                header["key"] = item["title"].lower()
+                header["heading"] = "Coffee & Green Tea"
+                header["preface"] = "These foods are high in antioxidants which help combat oxidative stress and inflammation."
+                models_map["antioxidants"].append(header)
+                
+                list = {}
+                list["span"] = "full"
+                list["type"] = "list"
+                list["items"] = [line.strip() for line in item["description"].split(".") if line]
+                models_map["antioxidants"].append(list)
+
 
     return {
         "heading": heading,
-        "items": results
+        "preface": preface,
+        "items": results,
+        "models": [models_map[key] for key in models_map.keys()]
     }
 
 def extract_footnotes(soup):
@@ -1224,6 +1464,7 @@ def main(path: str = HTML_FILE, output: str = REPORT_JSON):
     soup = BeautifulSoup(raw, 'html.parser')
 
     report = {
+        "header": extract_header(soup),
         "preface": extract_preface(soup),
         "healthReport": extract_health_report(soup),
         "actionPlan": extract_action_plan(soup),

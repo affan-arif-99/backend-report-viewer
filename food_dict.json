@@ -1,0 +1,7 @@
+{
+    "sugar": ["white sugar", "high-fructose corn syrup", "honey", "maple syrup", "molasses"],
+    "flour": ["white flour"],
+    "sweets": ["sugar candies", "sweets", "sugary soda"],
+    "carbs": ["white rice", "white potatoes", "corn", "green peas"],
+    "spices": ["ceylon cinnamon", "cassia cinnamon", "saigon cinnamon"]
+}
