@@ -38,11 +38,11 @@ def main(input_path: str, output_filename: str, footer_tmpl: str):
         page.pdf(
             path=output_filename,
             format="A3",
-            print_background=True,
+            print_background=False,
             margin={"top":"0mm","bottom":"0mm","left":"0mm","right":"0mm"},
             prefer_css_page_size=True,
             display_header_footer=True,
-            footer_template=footer_tmpl
+            footer_template=footer_tmpl,
         )
 
         browser.close()
